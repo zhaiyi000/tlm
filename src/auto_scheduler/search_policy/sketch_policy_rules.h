@@ -171,6 +171,8 @@ class PopulationGenerationRule {
    */
   virtual ResultKind Apply(SketchPolicyNode* policy, State* state,
                            std::mt19937* rand_gen) const = 0;
+  virtual Array<State> Apply(SketchPolicyNode* policy, const Array<State> &states, 
+                     const PackedFunc &gen_func) const { return {}; };
 
   /*! \brief The deconstructor */
   virtual ~PopulationGenerationRule() = default;
@@ -181,6 +183,7 @@ class PopulationGenerationRule {
   class rule_name : public PopulationGenerationRule {                                             \
    public:                                                                                        \
     ResultKind Apply(SketchPolicyNode* policy, State* state, std::mt19937* rand_gen) const final; \
+    Array<State> Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const; \
   };
 
 /*! \brief The rule that fills the incomplete SplitSteps. */

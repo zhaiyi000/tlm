@@ -57,6 +57,9 @@ class MutatorNode : public runtime::Object {
    */
   virtual Optional<tir::Trace> Apply(const tir::Trace& trace,
                                      support::LinearCongruentialEngine::TRandState* rand_state) = 0;
+  virtual Optional<tir::Trace> ApplyDecision(const tir::Trace& trace,
+                                             support::LinearCongruentialEngine::TRandState* rand_state,
+                                             const std::vector<std::string>& tokens) { return NullOpt; }
 
   /*!
    * \brief Clone the mutator.
@@ -104,6 +107,7 @@ class Mutator : public runtime::ObjectRef {
    * \return The created mutator.
    */
   TVM_DLL static Mutator MutateParallel(int64_t max_jobs_per_core);
+  TVM_DLL static Mutator MutateAllParallel(int64_t max_jobs_per_core);
   /*!
    * \brief Create a Mutator that mutates auto unroll step
    * \return The mutator created

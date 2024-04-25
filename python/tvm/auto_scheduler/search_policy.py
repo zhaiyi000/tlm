@@ -253,6 +253,10 @@ class SketchPolicy(SearchPolicy):
         """
         states = _ffi_api.SketchPolicySampleInitialPopulation(self)
         return states
+    
+    def gen_states(self, states, gen_func):
+        states = _ffi_api.GenStates(self, states, gen_func)
+        return states
 
     def evolutionary_search(self, init_populations, out_size):
         """Perform evolutionary search.

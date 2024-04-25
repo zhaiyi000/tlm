@@ -305,6 +305,7 @@ class EvolutionarySearchNode : public SearchStrategyNode {
      * \return The picked best candidates.
      */
     inline std::vector<Schedule> PickBestFromDatabase(int num);
+    inline std::vector<Schedule> LoadAllFromDatabaseAndApplyDecision(const Array<Array<String>> &decision_tokens);
     /*!
      * \brief Sample the initial population from previous measured results and randomly generated
      *  traces via trace replaying.
@@ -319,6 +320,7 @@ class EvolutionarySearchNode : public SearchStrategyNode {
      * \return The evolved traces from initial population.
      */
     inline std::vector<Schedule> EvolveWithCostModel(std::vector<Schedule> population, int num);
+    inline std::vector<Schedule> MutateAllParallel(std::vector<Schedule> population);
     /*!
      * \brief Pick final candidates from the given initial population and bests of evolved ones.
      * \param inits The initial population of traces sampled.
@@ -330,6 +332,8 @@ class EvolutionarySearchNode : public SearchStrategyNode {
                                                    const std::vector<Schedule>& bests, int num);
     /*! \brief An interface method to be called by it's counterpart in EvolutionarySearchNode */
     inline Optional<Array<MeasureCandidate>> GenerateMeasureCandidates();
+    inline Array<Schedule> GeneratePopulations();
+    inline std::vector<Schedule> ApplyDecisions(const Array<Array<String>> &decision_tokens);
     /*! \brief An interface method to be called by it's counterpart in EvolutionarySearchNode */
     inline void NotifyRunnerResults(const Array<MeasureCandidate>& measure_candidates,
                                     const Array<RunnerResult>& results);
@@ -418,7 +422,7 @@ class EvolutionarySearchNode : public SearchStrategyNode {
 
   void PreTuning(int max_trials, int num_trials_per_iter, const Array<Schedule>& design_spaces,
                  const Optional<Database>& database, const Optional<CostModel>& cost_model) final {
-    ICHECK(!design_spaces.empty());
+    // ICHECK(!design_spaces.empty());
     CHECK(this->ctx_ != nullptr) << "ValueError: Did you forget to initialize the TuneContext?";
     CHECK(database.defined())
         << "ValueError: Database is not supplied in PreTuning. Evolutionary"
@@ -445,6 +449,16 @@ class EvolutionarySearchNode : public SearchStrategyNode {
   Optional<Array<MeasureCandidate>> GenerateMeasureCandidates() final {
     ICHECK(this->state_ != nullptr);
     return this->state_->GenerateMeasureCandidates();
+  }
+
+  Array<Schedule> GeneratePopulations() final {
+    ICHECK(this->state_ != nullptr);
+    return this->state_->GeneratePopulations();
+  }
+
+  std::vector<Schedule> ApplyDecisions(const Array<Array<String>> &decision_tokens) final {
+    ICHECK(this->state_ != nullptr);
+    return this->state_->ApplyDecisions(decision_tokens);
   }
 
   void NotifyRunnerResults(const Array<MeasureCandidate>& measure_candidates,
@@ -499,6 +513,104 @@ std::vector<Schedule> EvolutionarySearchNode::State::PickBestFromDatabase(int nu
   };
   support::parallel_for_dynamic(0, actual_num, self->ctx_->num_threads, f_proc_measured);
   return results;
+}
+
+std::vector<Schedule> EvolutionarySearchNode::State::LoadAllFromDatabaseAndApplyDecision(const Array<Array<String>> &decision_tokens) {
+  // {
+  //   ThreadedTraceApply pp(self->postprocs_);
+  //   std::vector<Schedule> schs(measured_list.size());
+  //   support::parallel_for_dynamic(0, measured_list.size(), self->ctx_->num_threads,
+  //                                 [this, &measured_list, &schs, &pp](int thread_id, int trace_id) {
+  //                                   PerThreadData& data = this->per_thread_data_.at(thread_id);
+  //                                   const IRModule& mod = data.mod;
+  //                                   TRandState* rand_state = &data.rand_state;
+  //                                   const tir::Trace& trace = measured_list[trace_id];
+  //                                   if (Optional<Schedule> sch = pp.Apply(mod, trace, rand_state)) {
+  //                                     schs[trace_id] = sch.value();
+  //                                   }
+  //                                 });
+  //   for (const Schedule& sch : schs) {
+  //     const IRModule& mod = sch->mod();
+  //     size_t shash = self->state_->ModuleHash(mod);
+  //     if (!self->state_->measured_workloads_.Has(mod, shash)) {
+  //       self->state_->measured_workloads_.Add(mod, shash);
+  //     } else {
+  //       // LOG(FATAL) << "Should not repeat!";
+  //       // throw;
+  //     }
+  //   }
+  // }
+  auto _ = Profiler::TimedScope("EvoSearch/LoadAllFromDatabaseAndApplyDecision");
+  std::vector<tir::Trace> measured_traces;
+  measured_traces.reserve(this->database_->Size());
+  Array<TuningRecord> top_records = this->database_->GetAllTuningRecords();
+  for (TuningRecord record : top_records) {
+    measured_traces.push_back(record->trace);
+  }
+  int actual_num = measured_traces.size();
+  Mutator mutator = Mutator::MutateAllParallel(/*max_jobs_per_core=*/16);
+  mutator->InitializeWithTuneContext(GetRef<TuneContext>(self->ctx_));
+  ThreadedTraceApply pp(self->postprocs_);
+  std::vector<Schedule> out_schs;
+  std::vector<Schedule> results(actual_num, Schedule{nullptr});
+  auto f_proc_measured = [this, &measured_traces, &results, &pp, &decision_tokens, &mutator](int thread_id,
+                                                                int trace_id) -> void {
+    PerThreadData& data = this->per_thread_data_.at(thread_id);
+    TRandState* rand_state = &data.rand_state;
+    const IRModule& mod = data.mod;
+    tir::Trace trace = measured_traces.at(trace_id);
+    tir::Trace trace_new = trace;
+    Schedule& result = results.at(trace_id);
+    ICHECK(!result.defined());
+
+    size_t inst_i = 0;
+    std::vector<std::string> tokens = std::vector<std::string>(decision_tokens[trace_id].begin(), decision_tokens[trace_id].end());
+    size_t token_idx = 0;
+    try {
+      for (const tir::Instruction& inst : trace->insts)  {
+        if (Optional<ObjectRef> decision = trace->GetDecision(inst)) {
+          const std::string& token = tokens.at(token_idx++);
+          if (std::to_string(inst_i) != token) break;
+          if (const ArrayNode* decision_array = decision.as<ArrayNode>()) {
+            std::vector<int64_t> tiles;
+            for (size_t i = 0; i < decision_array->size(); i++) {
+              tiles.push_back(std::stol(tokens.at(token_idx++)));
+            }
+            trace_new = trace_new->WithDecision(inst, support::AsArray<int64_t, ObjectRef>(tiles), true);
+          } else {
+            trace_new = trace_new->WithDecision(inst, Integer(std::stoi(tokens.at(token_idx++))), true);
+          }
+        }
+        inst_i++;
+      }
+      if (inst_i == trace->insts.size()) {
+        if (Optional<tir::Trace> new_trace = mutator->ApplyDecision(trace_new, rand_state, tokens)) {
+          if (Optional<Schedule> sch = pp.Apply(mod, trace_new, rand_state)) {
+            result = sch.value();
+          }
+        }
+      }
+    } catch (std::exception& e) {
+      // std::cout << e.what() << std::endl;
+      // std::cout << "";
+    }
+  };
+  support::parallel_for_dynamic(0, actual_num, self->ctx_->num_threads, f_proc_measured);
+
+  for (int i = 0; i < actual_num; i++) {
+    const Schedule& sch = results[i];
+    if (sch.defined()) {
+      const IRModule& mod = sch->mod();
+      size_t shash = self->state_->ModuleHash(mod);
+      if (!self->state_->measured_workloads_.Has(mod, shash)) {
+        self->state_->measured_workloads_.Add(mod, shash);
+        out_schs.push_back(sch);
+      } else {
+        // std::cout << "find measured record!!!!!!!!!!!################3" << std::endl;
+      }
+    }
+  }
+  return out_schs;
 }
 
 std::vector<Schedule> EvolutionarySearchNode::State::SampleInitPopulation(int num) {
@@ -798,6 +910,58 @@ Array<Schedule> EvolutionarySearchEvolveWithCostModel(EvolutionarySearch self,
     }
   }
   return result;
+}
+
+
+std::vector<Schedule> EvolutionarySearchNode::State::MutateAllParallel(
+    std::vector<Schedule> population) {
+  ThreadedTraceApply pp(self->postprocs_);
+  std::vector<Schedule> results(population.size(), Schedule{nullptr});
+  Mutator mutator = Mutator::MutateAllParallel(/*max_jobs_per_core=*/16);
+  mutator->InitializeWithTuneContext(GetRef<TuneContext>(self->ctx_));
+  auto f_proc_measured = [this, &population, &pp, &results, &mutator](int thread_id,
+                                                                 int trace_id) -> void {
+    PerThreadData& data = this->per_thread_data_.at(thread_id);
+    TRandState* rand_state = &data.rand_state;
+    const IRModule& mod = data.mod;
+    Schedule& result = results.at(trace_id);
+    tir::Trace trace = population.at(trace_id)->trace().value();
+    if (Optional<tir::Trace> new_trace = mutator->Apply(trace, rand_state)) {
+      if (Optional<Schedule> sch = pp.Apply(mod, new_trace.value(), rand_state)) {
+        // note that sch's trace is different from new_trace
+        // because it contains post-processing information
+        result = sch.value();
+      }
+    }
+  };
+  support::parallel_for_dynamic(0, population.size(), self->ctx_->num_threads, f_proc_measured);
+  return results;
+}
+
+Array<Schedule> EvolutionarySearchNode::State::GeneratePopulations() {
+  int pop = self->population_size;
+  Array<Schedule> result;
+  for (int retry_i = 0; retry_i < 20; retry_i++) {
+    std::vector<Schedule> inits = SampleInitPopulation(pop);
+    std::vector<Schedule> schs = MutateAllParallel(inits);
+    for (Schedule sch : schs) {
+      IRModule mod = sch->mod();
+      size_t shash = self->state_->ModuleHash(mod);
+      if (!self->state_->measured_workloads_.Has(mod, shash)) {
+        self->state_->measured_workloads_.Add(mod, shash);
+        result.push_back(sch);
+      }
+    }
+    if (static_cast<int>(result.size()) >= pop) {
+      break;
+    }
+    std::cout << retry_i << ": " << result.size() << std::endl;
+  }
+  return result;
+}
+
+std::vector<Schedule> EvolutionarySearchNode::State::ApplyDecisions(const Array<Array<String>> &decision_tokens) {
+  return LoadAllFromDatabaseAndApplyDecision(decision_tokens);
 }
 
 TVM_REGISTER_NODE_TYPE(EvolutionarySearchNode);

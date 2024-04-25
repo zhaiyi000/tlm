@@ -377,6 +377,12 @@ Array<State> SketchPolicyNode::GenerateSketches() {
     out_states.Set(i, std::move(state));
   }
 
+  for (size_t i = 0; i < out_states.size(); ++i) {
+    auto state = out_states[i];
+    state.add_prompt();
+    out_states.Set(i, std::move(state));
+  }
+
   StdCout(verbose) << "Generate Sketches\t\t#s: " << out_states.size() << std::endl;
   return out_states;
 }
@@ -482,6 +488,20 @@ Array<State> SketchPolicyNode::SampleInitPopulation(const Array<State>& sketches
                    << "\tfail_ct: " << fail_ct << "\tTime elapsed: " << std::fixed
                    << std::setprecision(2) << duration << std::endl;
   return out_states;
+}
+
+Array<State> SketchPolicyNode::GenStates(const Array<State>& states, const PackedFunc &gen_func) {
+  Array<State> retArray = states;
+  for (const auto& rule : init_rules) {
+    if (retArray.size() == 0) break;
+    retArray = rule->Apply(this, retArray, gen_func);
+  }
+  std::cout << std::endl;
+
+  retArray = search_task->compute_dag.InferBound(retArray);
+  PruneInvalidState(search_task, &retArray);
+
+  return retArray;
 }
 
 Array<State> SketchPolicyNode::EvolutionarySearch(const Array<State>& init_population,
@@ -709,6 +729,12 @@ TVM_REGISTER_GLOBAL("auto_scheduler.SketchPolicySampleInitialPopulation")
       return init_population;
     });
 
+TVM_REGISTER_GLOBAL("auto_scheduler.GenStates")
+    .set_body_typed([](SketchPolicy policy, Array<State> states, PackedFunc gen_func) {
+      Array<State> gen_states = policy->GenStates(states, gen_func);
+      return gen_states;
+    });
+
 TVM_REGISTER_GLOBAL("auto_scheduler.SketchPolicyEvolutionarySearch")
     .set_body_typed([](SketchPolicy policy, Array<State> init_population, int out_size) {
       Array<State> states = policy->EvolutionarySearch(init_population, out_size);
@@ -717,6 +743,12 @@ TVM_REGISTER_GLOBAL("auto_scheduler.SketchPolicyEvolutionarySearch")
 
 TVM_REGISTER_GLOBAL("auto_scheduler.PrintTitle").set_body_typed([](std::string title) {
   PrintTitle(title, 1);
+});
+
+TVM_REGISTER_GLOBAL("auto_scheduler.PruneInvalidState").set_body_typed([](SearchTask task, Array<State> states) {
+  // Array<State> ret_states;
+  PruneInvalidState(task, &states);
+  return states;
 });
 
 TVM_REGISTER_GLOBAL("auto_scheduler.PreloadCustomSketchRule")

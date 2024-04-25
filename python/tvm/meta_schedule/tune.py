@@ -128,3 +128,127 @@ def tune_tasks(
         cost_model=cost_model,
     )
     return database
+
+
+def dump_program(
+    *,
+    tasks: List[TuneContext],
+    task_weights: List[float],
+    work_dir: str,
+    max_trials_global: int,
+    max_trials_per_task: Optional[int] = None,
+    num_trials_per_iter: int = 64,
+    builder: Builder.BuilderType = "local",
+    runner: Runner.RunnerType = "local",
+    database: Database.DatabaseType = "json",
+    cost_model: CostModel.CostModelType = "xgb",
+    measure_callbacks: MeasureCallback.CallbackListType = "default",
+    task_scheduler: TaskScheduler.TaskSchedulerType = "gradient",
+    module_equality: str = "structural",
+) -> Database:
+    if len(tasks) == 0:
+        raise ValueError("No tasks to tune.")
+
+    if len(tasks) != len(task_weights):
+        raise ValueError(
+            f"Length of tasks ({len(tasks)}) and task_weights ({len(task_weights)}) do not match."
+        )
+
+    num_cores = tasks[0].num_threads
+
+    if max_trials_per_task is None:
+        max_trials_per_task = max_trials_global
+    if not isinstance(builder, Builder):
+        builder = Builder.create(builder, max_workers=num_cores)
+    if not isinstance(runner, Runner):
+        runner = Runner.create(runner, max_workers=num_cores)
+    if database == "json":
+        database = Database.create(database, work_dir=work_dir, module_equality=module_equality)
+    elif not isinstance(database, Database):
+        database = Database.create(database, module_equality=module_equality)
+    if not isinstance(cost_model, CostModel):
+        cost_model = CostModel.create(cost_model, num_tuning_cores=num_cores)
+    if isinstance(measure_callbacks, MeasureCallback):
+        measure_callbacks = [measure_callbacks]
+    elif measure_callbacks == "default":
+        measure_callbacks = MeasureCallback.create(measure_callbacks)
+    if not isinstance(task_scheduler, TaskScheduler):
+        task_scheduler = TaskScheduler.create(task_scheduler)
+    task_scheduler.dump_program(
+        tasks=tasks,
+        task_weights=task_weights,
+        max_trials_global=max_trials_global,
+        max_trials_per_task=max_trials_per_task,
+        num_trials_per_iter=num_trials_per_iter,
+        builder=builder,
+        runner=runner,
+        measure_callbacks=measure_callbacks,
+        database=database,
+        cost_model=cost_model,
+    )
+    return database
+
+
+def gen_state(
+    *,
+    tasks: List[TuneContext],
+    task_weights: List[float],
+    work_dir: str,
+    max_trials_global: int,
+    decision_tokens,
+    max_trials_per_task: Optional[int] = None,
+    num_trials_per_iter: int = 64,
+    builder: Builder.BuilderType = "local",
+    runner: Runner.RunnerType = "local",
+    database: Database.DatabaseType = "json",
+    cost_model: CostModel.CostModelType = "xgb",
+    measure_callbacks: MeasureCallback.CallbackListType = "default",
+    task_scheduler: TaskScheduler.TaskSchedulerType = "gradient",
+    module_equality: str = "structural",
+    commit_database: Database = None,
+    is_build: bool = False,
+) -> Database:
+    if len(tasks) == 0:
+        raise ValueError("No tasks to tune.")
+
+    if len(tasks) != len(task_weights):
+        raise ValueError(
+            f"Length of tasks ({len(tasks)}) and task_weights ({len(task_weights)}) do not match."
+        )
+
+    num_cores = tasks[0].num_threads
+
+    if max_trials_per_task is None:
+        max_trials_per_task = max_trials_global
+    if not isinstance(builder, Builder):
+        builder = Builder.create(builder, max_workers=num_cores)
+    if not isinstance(runner, Runner):
+        runner = Runner.create(runner, max_workers=num_cores)
+    if database == "json":
+        database = Database.create(database, work_dir=work_dir, module_equality=module_equality)
+    elif not isinstance(database, Database):
+        database = Database.create(database, module_equality=module_equality)
+    if not isinstance(cost_model, CostModel):
+        cost_model = CostModel.create(cost_model, num_tuning_cores=num_cores)
+    if isinstance(measure_callbacks, MeasureCallback):
+        measure_callbacks = [measure_callbacks]
+    elif measure_callbacks == "default":
+        measure_callbacks = MeasureCallback.create(measure_callbacks)
+    if not isinstance(task_scheduler, TaskScheduler):
+        task_scheduler = TaskScheduler.create(task_scheduler)
+    task_scheduler.gen_state(
+        tasks=tasks,
+        task_weights=task_weights,
+        max_trials_global=max_trials_global,
+        max_trials_per_task=max_trials_per_task,
+        num_trials_per_iter=num_trials_per_iter,
+        builder=builder,
+        runner=runner,
+        measure_callbacks=measure_callbacks,
+        database=database,
+        cost_model=cost_model,
+        decision_tokens=decision_tokens,
+        commit_database=commit_database,
+        is_build=is_build
+    )
+    return database

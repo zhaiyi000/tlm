@@ -114,6 +114,8 @@ class SearchStrategyNode : public runtime::Object {
    * \return The measure candidates generated, nullptr if finished.
    */
   virtual Optional<Array<MeasureCandidate>> GenerateMeasureCandidates() = 0;
+  virtual std::vector<tir::Schedule> ApplyDecisions(const Array<Array<String>> &decision_tokens) { return {}; };
+  virtual Array<tir::Schedule> GeneratePopulations() { return {}; };
 
   /*!
    * \brief Update the search strategy with measurement results.

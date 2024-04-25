@@ -244,6 +244,10 @@ class ComputeDAG(Object):
         for tensor in self.tensors:
             io_shapes.append(get_const_tuple(tensor.shape))
         return json.dumps([hash_key] + io_shapes)
+    
+    def print_min(self):
+        str_dag = _ffi_api.ComputeDAGPrintDAGMin(self)
+        return str_dag
 
     def __str__(self):
         # pretty print

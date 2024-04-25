@@ -52,6 +52,27 @@ class TaskRecord(Object):
     builder_results: List[BuilderResult]
     runner_results: List[RunnerResult]
 
+    def __init__(self, ctx, weight=None):
+        if weight is None:
+            self.__init_handle_by_constructor__(_ffi_api.TaskSchedulerTaskRecord, ctx)
+        else:
+            self.__init_handle_by_constructor__(_ffi_api.TaskSchedulerTaskRecordWithWeight, ctx, weight)
+
+    def _set_measure_candidates(self, candidates):
+        _ffi_api.TuneContextSetMeasureCandidates(self, candidates)
+
+    def _send_to_builder(self, builder):
+        _ffi_api.TuneContextSendToBuilder(self, builder)
+
+    def _send_to_runner(self, runner):
+        _ffi_api.TuneContextSendToRunner(self, runner)
+
+    def _join(self):
+        return _ffi_api.TuneContextJoin(self)
+    
+    def _clear_measure_state(self, results):
+        _ffi_api.TuneContextClearMeasureState(self, results)
+
 
 @register_object("meta_schedule.TaskScheduler")
 class TaskScheduler(Object):
@@ -141,6 +162,68 @@ class TaskScheduler(Object):
             measure_callbacks,
             database,
             cost_model,
+        )
+
+    def dump_program(
+        self,
+        tasks: List[TuneContext],
+        task_weights: List[float],
+        max_trials_global: int,
+        max_trials_per_task: int,
+        num_trials_per_iter: int,
+        builder: Builder,
+        runner: Runner,
+        measure_callbacks: List[MeasureCallback],
+        database: Optional[Database],
+        cost_model: Optional[CostModel],
+    ) -> None:
+        task_weights = [float(w) for w in task_weights]
+        _ffi_api.TaskSchedulerDumpProgram(  # type: ignore # pylint: disable=no-member
+            self,
+            tasks,
+            task_weights,
+            max_trials_global,
+            max_trials_per_task,
+            num_trials_per_iter,
+            builder,
+            runner,
+            measure_callbacks,
+            database,
+            cost_model,
+        )
+
+    def gen_state(
+        self,
+        tasks: List[TuneContext],
+        task_weights: List[float],
+        max_trials_global: int,
+        max_trials_per_task: int,
+        num_trials_per_iter: int,
+        builder: Builder,
+        runner: Runner,
+        measure_callbacks: List[MeasureCallback],
+        database: Optional[Database],
+        cost_model: Optional[CostModel],
+        decision_tokens,
+        commit_database: Database = None,
+        is_build: bool = False,
+    ) -> None:
+        task_weights = [float(w) for w in task_weights]
+        _ffi_api.TaskSchedulerGenState(  # type: ignore # pylint: disable=no-member
+            self,
+            tasks,
+            task_weights,
+            max_trials_global,
+            max_trials_per_task,
+            num_trials_per_iter,
+            builder,
+            runner,
+            measure_callbacks,
+            database,
+            cost_model,
+            decision_tokens,
+            commit_database,
+            is_build
         )
 
     def terminate_task(self, task_id: int) -> None:

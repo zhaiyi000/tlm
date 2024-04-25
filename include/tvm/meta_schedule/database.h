@@ -47,10 +47,12 @@ class WorkloadNode : public runtime::Object {
   IRModule mod;
   /*! \brief The workload's structural hash. */
   THashCode shash;
+  String shash_str;
 
   void VisitAttrs(tvm::AttrVisitor* v) {
     v->Visit("mod", &mod);
     // `shash` is not visited because TVM FFI doesn't support uint64_t
+    v->Visit("shash_str", &shash_str);
   }
 
   static constexpr const char* _type_key = "meta_schedule.Workload";
@@ -263,6 +265,16 @@ class DatabaseNode : public runtime::Object {
   const ModuleEquality& GetModuleEquality() const {
     ICHECK(mod_eq_);
     return *mod_eq_;
+  }
+
+  virtual String GetHash(const IRModule &mod) const {
+    LOG(FATAL) << "NotImplementedError";
+    throw;
+  }
+
+  virtual bool CheckEqual(const IRModule &lhs, const IRModule &rhs) const {
+    LOG(FATAL) << "NotImplementedError";
+    throw;
   }
 
   static constexpr const char* _type_key = "meta_schedule.Database";

@@ -111,6 +111,28 @@ String PrettyPrint(const ObjectRef& node) {
   doc << TextPrinter(/*show_meta_data=*/false, nullptr, false).PrintFinal(node);
   return doc.str();
 }
+static int tlmPrintIdx = 1;
+void TLMPrintAndWrite(const char *chs) {
+  printf("\n-----------------------------%d\n%s\n-----------------------------%d\n", tlmPrintIdx, chs, tlmPrintIdx);
+  
+  FILE *fp = fopen("bb.cc", "a");
+  fprintf(fp, "\n-----------------------------%d\n%s\n-----------------------------%d\n", tlmPrintIdx, chs, tlmPrintIdx);
+  fclose(fp);
+
+  tlmPrintIdx++;
+}
+
+void tlmprint(const ObjectRef& node) {
+  TLMPrintAndWrite(PrettyPrint(node).c_str());
+}
+
+void tlmprintstr(const std::string str) {
+  TLMPrintAndWrite(str.c_str());
+}
+
+void tlmprintobj(const Object* node) {
+  TLMPrintAndWrite(PrettyPrint(GetRef<ObjectRef>(node)).c_str());
+}
 
 String AsText(const ObjectRef& node, bool show_meta_data,
               runtime::TypedPackedFunc<String(ObjectRef)> annotate) {

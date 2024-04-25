@@ -85,6 +85,7 @@ class TaskRecord : public runtime::ObjectRef {
  public:
   /*! \brief Constructor */
   explicit TaskRecord(TuneContext task, double task_weight);
+  explicit TaskRecord(TuneContext task);
 
   TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(TaskRecord, ObjectRef, TaskRecordNode);
 };
@@ -186,6 +187,29 @@ class TaskSchedulerNode : public runtime::Object {
                     Array<MeasureCallback> measure_callbacks,  //
                     Optional<Database> database,               //
                     Optional<CostModel> cost_model);
+  virtual void DumpProgram(Array<TuneContext> tasks,           //
+                    Array<FloatImm> task_weights,              //
+                    int max_trials_global,                     //
+                    int max_trials_per_task,                   //
+                    int num_trials_per_iter,                   //
+                    Builder builder,                           //
+                    Runner runner,                             //
+                    Array<MeasureCallback> measure_callbacks,  //
+                    Optional<Database> database,               //
+                    Optional<CostModel> cost_model);
+  virtual void GenState(Array<TuneContext> tasks,              //
+                    Array<FloatImm> task_weights,              //
+                    int max_trials_global,                     //
+                    int max_trials_per_task,                   //
+                    int num_trials_per_iter,                   //
+                    Builder builder,                           //
+                    Runner runner,                             //
+                    Array<MeasureCallback> measure_callbacks,  //
+                    Optional<Database> database,               //
+                    Optional<CostModel> cost_model,
+                    Array<Array<String>> decision_tokens,
+                    Database commit_database,
+                    bool is_build);
   /*!
    * \brief Terminate a task
    * \param task_id The id of the task to be terminated

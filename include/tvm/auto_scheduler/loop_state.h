@@ -397,6 +397,14 @@ class State : public ObjectRef {
    * Call ComputeDAG::InferBound on the updated state if you need the complete bound information.
    */
   TVM_DLL void compute_at(int stage_id, int target_stage_id, const Iterator& target_iter);
+  TVM_DLL void split_copy(int stage_id, int iter_id, Optional<PrimExpr> extent, 
+                          const Array<Optional<Integer>>& lengths, bool inner_to_outer);
+  TVM_DLL void add_prompt();
+  TVM_DLL void split_start();
+  TVM_DLL void compute_location_start(const Array<Integer>& stage_ids);
+  TVM_DLL void unroll_start(const Array<Integer>& stage_ids);
+  TVM_DLL void vectorization_start(const Array<Integer>& stage_ids);
+  TVM_DLL void thread_bind_start();
   /*!
    * \brief The schedule primitive corresponding to `te::Stage::compute_inline`.
    * \param stage_id The index of the stage to be marked compute inlined.

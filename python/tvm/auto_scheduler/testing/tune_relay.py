@@ -29,6 +29,7 @@ from tvm.meta_schedule.testing.relay_workload import get_network
 from tvm.meta_schedule.testing.tune_utils import create_timer, generate_input_data
 from tvm.meta_schedule.utils import cpu_count
 from tvm.support import describe
+import numpy as np
 
 
 def _parse_args():
@@ -53,21 +54,21 @@ def _parse_args():
         type=int,
         required=True,
     )
-    args.add_argument(
-        "--rpc-host",
-        type=str,
-        required=True,
-    )
-    args.add_argument(
-        "--rpc-port",
-        type=int,
-        required=True,
-    )
-    args.add_argument(
-        "--rpc-key",
-        type=str,
-        required=True,
-    )
+    # args.add_argument(
+    #     "--rpc-host",
+    #     type=str,
+    #     required=True,
+    # )
+    # args.add_argument(
+    #     "--rpc-port",
+    #     type=int,
+    #     required=True,
+    # )
+    # args.add_argument(
+    #     "--rpc-key",
+    #     type=str,
+    #     required=True,
+    # )
     args.add_argument(
         "--work-dir",
         type=str,
@@ -104,12 +105,12 @@ def _parse_args():
         help="example: True / False",
         default=True,
     )
-    args.add_argument(
-        "--cpu-flush",
-        type=lambda x: bool(strtobool(x)),
-        help="example: True / False",
-        required=True,
-    )
+    # args.add_argument(
+    #     "--cpu-flush",
+    #     type=lambda x: bool(strtobool(x)),
+    #     help="example: True / False",
+    #     required=True,
+    # )
     args.add_argument(
         "--backend",
         type=str,
@@ -120,12 +121,12 @@ def _parse_args():
     parsed = args.parse_args()
     parsed.target = tvm.target.Target(parsed.target)
     parsed.input_shape = json.loads(parsed.input_shape)
-    parsed.rpc_config = ms.runner.RPCConfig(
-        tracker_host=parsed.rpc_host,
-        tracker_port=parsed.rpc_port,
-        tracker_key=parsed.rpc_key,
-        session_timeout_sec=600,
-    )
+    # parsed.rpc_config = ms.runner.RPCConfig(
+    #     tracker_host=parsed.rpc_host,
+    #     tracker_port=parsed.rpc_port,
+    #     tracker_key=parsed.rpc_key,
+    #     session_timeout_sec=600,
+    # )
     return parsed
 
 
@@ -135,24 +136,26 @@ ARGS = _parse_args()
 def main():
     log_file = os.path.join(ARGS.work_dir, f"{ARGS.workload}.json")
 
-    runner = auto_scheduler.RPCRunner(
-        key=ARGS.rpc_key,
-        host=ARGS.rpc_host,
-        port=ARGS.rpc_port,
-        n_parallel=cpu_count(logical=True),
-        number=ARGS.number,
-        repeat=ARGS.repeat,
-        min_repeat_ms=ARGS.min_repeat_ms,
-        enable_cpu_cache_flush=ARGS.cpu_flush,
-        timeout=ARGS.rpc_config.session_timeout_sec,
-    )
+    # runner = auto_scheduler.RPCRunner(
+    #     key=ARGS.rpc_key,
+    #     host=ARGS.rpc_host,
+    #     port=ARGS.rpc_port,
+    #     n_parallel=cpu_count(logical=True),
+    #     number=ARGS.number,
+    #     repeat=ARGS.repeat,
+    #     min_repeat_ms=ARGS.min_repeat_ms,
+    #     enable_cpu_cache_flush=ARGS.cpu_flush,
+    #     timeout=ARGS.rpc_config.session_timeout_sec,
+    # )
 
     if ARGS.target.kind.name == "llvm":
+        enable_cpu_cache_flush = True
         hardware_params = auto_scheduler.HardwareParams(
-            num_cores=int(ARGS.target.attrs["num-cores"]),
+            # num_cores=int(ARGS.target.attrs["num-cores"]),
             target=ARGS.target,
         )
     elif ARGS.target.kind.name == "cuda":
+        enable_cpu_cache_flush = False
         hardware_params = auto_scheduler.HardwareParams(
             num_cores=-1,
             vector_unit_bytes=16,
@@ -167,6 +170,7 @@ def main():
         )
     else:
         raise NotImplementedError(f"Unsupported target {ARGS.target}")
+    runner = auto_scheduler.LocalRunner(repeat=10, enable_cpu_cache_flush=enable_cpu_cache_flush, number=1, timeout=5)
 
     describe()
     print(f"Workload: {ARGS.workload}")
@@ -235,14 +239,13 @@ def main():
     print("Tuning Time:")
     print(profiler.table())
 
-    run_module_via_rpc(
-        rpc_config=ARGS.rpc_config,
-        lib=lib,
-        dev_type=ARGS.target.kind.name,
-        args=input_data,
-        continuation=create_timer(ARGS.backend),
-        backend=ARGS.backend,
-    )
+    from tvm.contrib import graph_executor
+    dev = tvm.device(str(ARGS.target), 0)
+    module = graph_executor.GraphModule(lib["default"](dev))
+    data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(input_dtype))
+    module.set_input(input_name, data_tvm)
+    print("Evaluate inference time cost...")
+    print(module.benchmark(dev, repeat=100, min_repeat_ms=500))
 
 
 if __name__ == "__main__":

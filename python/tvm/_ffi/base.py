@@ -43,7 +43,7 @@ if sys.platform == "win32":
 
     py_str = _py_str
 else:
-    py_str = lambda x: x.decode("utf-8")
+    py_str = lambda x: x.decode("utf-8", errors="ignore")
 
 
 def _load_lib():

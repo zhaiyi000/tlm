@@ -330,6 +330,49 @@ void State::compute_root(int stage_id) {
   step->ApplyToState(this);
 }
 
+void State::split_copy(int stage_id, int iter_id, Optional<PrimExpr> extent, 
+                       const Array<Optional<Integer>>& lengths, bool inner_to_outer) {
+  SplitCopyStep step = SplitCopyStep(stage_id, iter_id, extent, lengths, inner_to_outer);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
+void State::add_prompt() {
+  PromptStep step = PromptStep(0);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
+void State::split_start() {
+  SplitStartStep step = SplitStartStep(0);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
+void State::compute_location_start(const Array<Integer>& stage_ids) {
+  ComputeLocationStartStep step = ComputeLocationStartStep(stage_ids);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
+void State::unroll_start(const Array<Integer>& stage_ids) {
+  UnrollStartStep step = UnrollStartStep(stage_ids);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
+void State::vectorization_start(const Array<Integer>& stage_ids) {
+  VectorizationStartStep step = VectorizationStartStep(stage_ids);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
+void State::thread_bind_start() {
+  ThreadBindStartStep step = ThreadBindStartStep(0);
+  CopyOnWrite()->transform_steps.push_back(step);
+  step->ApplyToState(this);
+}
+
 int State::cache_read(int stage_id, const String& scope_name,
                       const Array<Integer>& reader_stage_ids, const ComputeDAG& dag) {
   CacheReadStep step = CacheReadStep(stage_id, scope_name, reader_stage_ids);
@@ -437,6 +480,16 @@ void PrintState(std::ostream* os, const State& state, bool delete_trivial_loop) 
       LOG(FATAL) << "Invalid op type";
     }
   }
+
+  // dmlc::JSONWriter writer(os);
+  // writer.BeginArray(false);
+  // for (const auto& step : state->transform_steps) {
+  //   writer.WriteArraySeperator();
+  //   writer.BeginArray(false);
+  //   step->WriteToRecord(&writer);
+  //   writer.EndArray();
+  // }
+  // writer.EndArray();
 }
 
 String State::ToStr(bool delete_trivial_loop) const {

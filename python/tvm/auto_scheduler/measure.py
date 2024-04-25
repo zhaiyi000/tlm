@@ -140,6 +140,9 @@ class MeasureInput(Object):
             _ffi_api.SerializeMeasureInput(self),
             serialize_workload_registry_entry(self.task.workload_key),
         ]
+    
+    def to_json(self):
+        return _ffi_api.SerializeMeasureInput(self)
 
     @staticmethod
     def deserialize(data):
@@ -309,6 +312,9 @@ class ProgramMeasurer(Object):
         self.__init_handle_by_constructor__(
             _ffi_api.ProgramMeasurer, builder, runner, callbacks, verbose, max_continuous_error
         )
+
+    def measure(self, task, policy, inputs):
+        return _ffi_api.ProgramMeasurerMeasure(self, task, policy, inputs)
 
 
 @tvm._ffi.register_object("auto_scheduler.LocalBuilder")

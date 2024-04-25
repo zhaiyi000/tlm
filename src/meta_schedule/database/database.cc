@@ -28,6 +28,7 @@ Workload::Workload(IRModule mod) {
   ObjectPtr<WorkloadNode> n = runtime::make_object<WorkloadNode>();
   n->mod = mod;
   n->shash = ModuleEquality::Create("structural")->Hash(mod);
+  n->shash_str = String(std::to_string(n->shash));
   data_ = std::move(n);
 }
 
@@ -35,6 +36,7 @@ Workload::Workload(IRModule mod, Workload::THashCode shash) {
   ObjectPtr<WorkloadNode> n = runtime::make_object<WorkloadNode>();
   n->mod = mod;
   n->shash = shash;
+  n->shash_str = String(std::to_string(n->shash));
   data_ = std::move(n);
 }
 

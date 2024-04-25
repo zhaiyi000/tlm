@@ -183,9 +183,9 @@ class MutateParallelNode : public MutatorNode {
   // Inherit from `MutatorNode`
   void InitializeWithTuneContext(const TuneContext& context) final {
     Target target = context->target.value();
-    this->max_parallel_extent_ = GetTargetNumCores(target) * this->max_jobs_per_core;
-    this->json_mod_ = SaveJSON(context->mod.value());
-  }
+      this->max_parallel_extent_ = GetTargetNumCores(target) * this->max_jobs_per_core;
+      this->json_mod_ = SaveJSON(context->mod.value());
+    }
   // Inherit from `MutatorNode`
   Optional<Trace> Apply(const Trace& trace, TRandState* rand_state) final;
   // Inherit from `MutatorNode`
@@ -313,6 +313,243 @@ Mutator Mutator::MutateParallel(int64_t max_jobs_per_core) {
 
 TVM_REGISTER_NODE_TYPE(MutateParallelNode);
 TVM_REGISTER_GLOBAL("meta_schedule.MutatorMutateParallel").set_body_typed(Mutator::MutateParallel);
+
+
+/*! \brief Create a Mutator that mutates the parallel extent */
+class MutateAllParallelNode : public MutatorNode {
+ public:
+  /*!
+   * \brief The maximum number of jobs to be launched per CPU core.
+   * It sets the uplimit of CPU parallelism, i.e. `num_cores * max_jobs_per_core`.
+   * Use -1 to disable parallelism.
+   */
+  int64_t max_jobs_per_core;
+  /*! \brief The number of cores in CPU. */
+  int max_parallel_extent_;
+  /*! \brief JSON representation of the workload */
+  std::string json_mod_;
+
+  void VisitAttrs(tvm::AttrVisitor* v) {
+    v->Visit("max_jobs_per_core", &max_jobs_per_core);
+    // `max_parallel_extent_` is not visited.
+    // `json_mod` is not visited.
+  }
+
+  static constexpr const char* _type_key = "meta_schedule.MutateAllParallel";
+  TVM_DECLARE_FINAL_OBJECT_INFO(MutateAllParallelNode, MutatorNode);
+
+ public:
+  struct Candidate;
+  // Inherit from `MutatorNode`
+  void InitializeWithTuneContext(const TuneContext& context) final {
+    Target target = context->target.value();
+    if (target->kind->name == "llvm") {
+      this->max_parallel_extent_ = GetTargetNumCores(target) * this->max_jobs_per_core;
+      this->json_mod_ = SaveJSON(context->mod.value());
+    }
+  }
+  // Inherit from `MutatorNode`
+  Optional<Trace> Apply(const Trace& trace, TRandState* rand_state) final;
+  Optional<tir::Trace> ApplyDecision(const tir::Trace& trace, TRandState* rand_state, const std::vector<std::string>& tokens);
+  // Inherit from `MutatorNode`
+  Mutator Clone() const final {
+    ObjectPtr<MutateAllParallelNode> n = make_object<MutateAllParallelNode>(*this);
+    return Mutator(n);
+  }
+};
+
+/*! \brief The candidate to be mutated */
+struct MutateAllParallelNode::Candidate {
+  /*! \brief The annotation instruction */
+  Instruction inst;
+  /*! \brief The current parallel extent */
+  int64_t parallel_extent;
+  /*! \brief The name of the root block */
+  String block_name;
+  /*! \brief The name of the PrimFunc */
+  String func_name;
+};
+
+void FindAllParallelDecision(const Trace& trace,
+                             std::vector<MutateAllParallelNode::Candidate>* candidates) {
+  using tir::BlockRVNode;
+  using tir::InstructionNode;
+  std::unordered_map<const BlockRVNode*, const InstructionNode*> get_block_insts;
+  std::vector<const InstructionNode*> ann_insts;
+  get_block_insts.reserve(trace->insts.size());
+  ann_insts.reserve(trace->insts.size());
+  for (const Instruction& inst : trace->insts) {
+    if (tir::IsAnnotateWithParallel(inst)) {
+      ann_insts.push_back(inst.get());
+    }
+    if (const BlockRVNode* block_rv = tir::GetInstGetBlockOutput(inst)) {
+      get_block_insts[block_rv] = inst.get();
+    }
+  }
+  int n_ann_insts = ann_insts.size();
+  if (n_ann_insts == 0) {
+    return;
+  }
+  // const InstructionNode* ann_inst = ann_insts[tir::SampleInt(rand_state, 0, n_ann_insts)];
+  for (const InstructionNode* ann_inst : ann_insts) {
+    ICHECK_EQ(ann_inst->inputs.size(), 2);
+    const InstructionNode* get_block_inst =
+        get_block_insts.at(Downcast<tir::BlockRV>(ann_inst->inputs[0]).get());
+    ICHECK_EQ(get_block_inst->attrs.size(), 2);
+    candidates->push_back(MutateAllParallelNode::Candidate());
+    MutateAllParallelNode::Candidate *candidate = &(candidates->back());
+    candidate->inst = GetRef<Instruction>(ann_inst);
+    candidate->parallel_extent = Downcast<IntImm>(ann_inst->inputs[1])->value;
+    candidate->block_name = Downcast<String>(get_block_inst->attrs[0]);
+    candidate->func_name = Downcast<String>(get_block_inst->attrs[1]);
+  }
+}
+
+Optional<Trace> MutateAllParallelNode::Apply(const Trace& trace, TRandState* rand_state) {
+  // Step 1. Find a parallel decision.
+  std::vector<Candidate> candidates;
+  FindAllParallelDecision(trace, &candidates);
+  if (candidates.size() == 0) {
+    return trace;
+  }
+  // Step 2. Replay the instructions to recover loop extents
+  tir::Schedule sch = tir::Schedule::Traced(                  //
+      /*mod=*/Downcast<IRModule>(LoadJSON(this->json_mod_)),  //
+      /*rand_state=*/ForkSeed(rand_state),                    //
+      /*debug_mode=*/0,
+      /*error_render_level=*/tir::ScheduleErrorRenderLevel::kNone);
+  trace->ApplyToSchedule(sch, /*remove_postproc=*/true);
+  Trace tmp_trace = trace;
+  for (const Candidate& candidate: candidates) {
+    // Step 3. Find all possible parallel plans
+    std::vector<std::vector<int64_t>> loop_extent_prods = tir::AnalyzeParallel(
+        sch->state(), candidate.block_name, candidate.func_name, this->max_parallel_extent_);
+    std::unordered_map<int64_t, std::vector<int>> limit2plan;
+    std::map<std::vector<int>, int64_t> plan2limit;
+    for (const std::vector<int64_t>& prods : loop_extent_prods) {
+      for (int64_t limit : prods) {
+        if (limit <= this->max_parallel_extent_ && !limit2plan.count(limit)) {
+          std::vector<int> plan = tir::GetNumFusedLoops(loop_extent_prods, limit);
+          limit2plan[limit] = plan;
+          plan2limit[plan] = limit;
+        }
+      }
+    }
+    // Step 4. Remove the original plan and remove it
+    std::vector<int> original_plan =
+        tir::GetNumFusedLoops(loop_extent_prods, candidate.parallel_extent);
+    auto it = plan2limit.find(original_plan);
+    if (it != plan2limit.end()) {
+      plan2limit.erase(it);
+    }
+    // Step 5. Pick a new plan
+    int n_plans = plan2limit.size();
+    if (n_plans == 0) {
+      continue;
+    }
+    it = plan2limit.begin();
+    for (int i = 0, n = tir::SampleInt(rand_state, 0, n_plans); i < n; ++i) {
+      ++it;
+    }
+    int64_t limit = it->second;
+    // Step 6. Assemble a new tmp_trace
+    Array<Instruction> insts;
+    insts.reserve(tmp_trace->insts.size());
+    for (const Instruction& inst : tmp_trace->insts) {
+      if (inst.same_as(candidate.inst)) {
+        insts.push_back(tir::ReplaceAnnValue(candidate.inst, limit));
+      } else if (inst->kind->IsPostproc()) {
+        break;
+      } else {
+        insts.push_back(inst);
+      }
+    }
+    tmp_trace = Trace(insts, trace->decisions);
+  }
+  return tmp_trace;
+}
+
+Optional<tir::Trace> MutateAllParallelNode::ApplyDecision(const tir::Trace& trace, TRandState* rand_state, const std::vector<std::string>& tokens) {
+  // Step 1. Find a parallel decision.
+  std::vector<Candidate> candidates;
+  FindAllParallelDecision(trace, &candidates);
+  if (candidates.size() == 0) {
+    return trace;
+  }
+  // Step 2. Replay the instructions to recover loop extents
+  tir::Schedule sch = tir::Schedule::Traced(                  //
+      /*mod=*/Downcast<IRModule>(LoadJSON(this->json_mod_)),  //
+      /*rand_state=*/ForkSeed(rand_state),                    //
+      /*debug_mode=*/0,
+      /*error_render_level=*/tir::ScheduleErrorRenderLevel::kNone);
+  trace->ApplyToSchedule(sch, /*remove_postproc=*/true);
+  Trace tmp_trace = trace;
+  int token_idx = 2;
+  for (const Candidate& candidate: candidates) {
+    // // Step 3. Find all possible parallel plans
+    // std::vector<std::vector<int64_t>> loop_extent_prods = tir::AnalyzeParallel(
+    //     sch->state(), candidate.block_name, candidate.func_name, this->max_parallel_extent_);
+    // std::unordered_map<int64_t, std::vector<int>> limit2plan;
+    // std::map<std::vector<int>, int64_t> plan2limit;
+    // for (const std::vector<int64_t>& prods : loop_extent_prods) {
+    //   for (int64_t limit : prods) {
+    //     if (limit <= this->max_parallel_extent_ && !limit2plan.count(limit)) {
+    //       std::vector<int> plan = tir::GetNumFusedLoops(loop_extent_prods, limit);
+    //       limit2plan[limit] = plan;
+    //       plan2limit[plan] = limit;
+    //     }
+    //   }
+    // }
+    // // Step 4. Remove the original plan and remove it
+    // std::vector<int> original_plan =
+    //     tir::GetNumFusedLoops(loop_extent_prods, candidate.parallel_extent);
+    // auto it = plan2limit.find(original_plan);
+    // if (it != plan2limit.end()) {
+    //   plan2limit.erase(it);
+    // }
+    // // Step 5. Pick a new plan
+    // int n_plans = plan2limit.size();
+    // if (n_plans == 0) {
+    //   continue;
+    // }
+    // it = plan2limit.begin();
+    // for (int i = 0, n = tir::SampleInt(rand_state, 0, n_plans); i < n; ++i) {
+    //   ++it;
+    // }
+    // int64_t limit = it->second;
+    // Step 6. Assemble a new tmp_trace
+
+    int64_t limit;
+    try {
+      limit = std::stoll(tokens.at(token_idx));
+      token_idx += 4;
+    } catch (std::exception& e) {
+      return NullOpt;
+    }
+    Array<Instruction> insts;
+    insts.reserve(tmp_trace->insts.size());
+    for (const Instruction& inst : tmp_trace->insts) {
+      if (inst.same_as(candidate.inst)) {
+        insts.push_back(tir::ReplaceAnnValue(candidate.inst, limit));
+      } else if (inst->kind->IsPostproc()) {
+        break;
+      } else {
+        insts.push_back(inst);
+      }
+    }
+    tmp_trace = Trace(insts, trace->decisions);
+  }
+  return tmp_trace;
+}
+
+Mutator Mutator::MutateAllParallel(int64_t max_jobs_per_core) {
+  ObjectPtr<MutateAllParallelNode> n = make_object<MutateAllParallelNode>();
+  n->max_jobs_per_core = max_jobs_per_core;
+  return Mutator(n);
+}
+
+TVM_REGISTER_NODE_TYPE(MutateAllParallelNode);
+TVM_REGISTER_GLOBAL("meta_schedule.MutatorAllMutateParallel").set_body_typed(Mutator::MutateAllParallel);
 
 }  // namespace meta_schedule
 }  // namespace tvm

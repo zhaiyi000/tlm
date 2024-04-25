@@ -130,6 +130,9 @@ class Id : public ObjectRef {
  * \sa AsText.
  */
 TVM_DLL String PrettyPrint(const ObjectRef& node);
+void tlmprint(const ObjectRef& node);
+void tlmprintstr(const std::string str);
+void tlmprintobj(const Object* node);
 
 /*!
  * \brief Render the node as a string in the text format.

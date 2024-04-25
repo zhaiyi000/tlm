@@ -268,6 +268,7 @@ class ComputeDAG : public ObjectRef {
    * \return The ComputeDAG in a string.
    */
   String PrintDAG(bool simple_mode = false) const;
+  String PrintDAGMin() const;
 
   /*!
    * \brief Fill the correct bound information for a given state by calling ir_pass::InferBound.

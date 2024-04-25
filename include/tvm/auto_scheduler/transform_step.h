@@ -546,6 +546,255 @@ class SplitStepNode : public StepNode {
   TVM_DECLARE_FINAL_OBJECT_INFO(SplitStepNode, StepNode);
 };
 
+class SplitCopyStepNode : public StepNode {
+ public:
+  /*! \brief The id of the iter to split. */
+  int iter_id;
+  /*! \brief The extent length of the axis to split. */
+  Optional<PrimExpr> extent;
+  /*! \brief The split factors. */
+  Array<Optional<Integer>> lengths;
+  /*!
+   * \brief If true, the `lengths` denote the lengths of iterators
+   * from inner level to outer level
+   */
+  bool inner_to_outer;
+
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "SPC";
+
+  static constexpr const char* _type_key = "auto_scheduler.SplitCopyStep";
+  TVM_DECLARE_FINAL_OBJECT_INFO(SplitCopyStepNode, StepNode);
+};
+
+class PromptStepNode : public StepNode {
+ public:
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "PPT";
+
+  static constexpr const char* _type_key = "auto_scheduler.PromptStepNode";
+  TVM_DECLARE_FINAL_OBJECT_INFO(PromptStepNode, StepNode);
+};
+
+class SplitStartStepNode : public StepNode {
+ public:
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "SPS";
+
+  static constexpr const char* _type_key = "auto_scheduler.SplitStartStepNode";
+  TVM_DECLARE_FINAL_OBJECT_INFO(SplitStartStepNode, StepNode);
+};
+
+class ComputeLocationStartStepNode : public StepNode {
+ public:
+  Array<Integer> stage_ids;
+
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "CLS";
+
+  static constexpr const char* _type_key = "auto_scheduler.ComputeLocationStartStepNode";
+  TVM_DECLARE_FINAL_OBJECT_INFO(ComputeLocationStartStepNode, StepNode);
+};
+
+class UnrollStartStepNode : public StepNode {
+ public:
+  Array<Integer> stage_ids;
+
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "PRS";
+
+  static constexpr const char* _type_key = "auto_scheduler.UnrollStartStepNode";
+  TVM_DECLARE_FINAL_OBJECT_INFO(UnrollStartStepNode, StepNode);
+};
+
+class VectorizationStartStepNode : public StepNode {
+ public:
+  Array<Integer> stage_ids;
+
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "VECS";
+
+  static constexpr const char* _type_key = "auto_scheduler.VectorizationStartStepNode";
+  TVM_DECLARE_FINAL_OBJECT_INFO(VectorizationStartStepNode, StepNode);
+};
+
+class ThreadBindStartStepNode : public StepNode {
+ public:
+  void WriteToRecord(dmlc::JSONWriter* writer) const final;
+
+  /*!
+   * \brief Apply the current step to State.
+   * \param state A mutable pointer to state, which will be updated.
+   */
+  void ApplyToState(State* state) const;
+
+  /*!
+   * \brief Apply the current step to tvm.schedule.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return The iterator results after split.
+   */
+  void ApplyToSchedule(Array<te::Stage>* stages,
+                                      StageToAxesMap* stage_to_axes) const;
+
+  /*!
+   * \brief Print the current step as equivalent python schedule API.
+   * \param stages The list of current stages
+   * \param stage_to_axes A map that maps stage ot all its iterators.
+   * \return Python schedule code.
+   */
+  String PrintAsPythonAPI(Array<te::Stage>* stages, StageToAxesMap* stage_to_axes) const;
+
+  static constexpr const char* record_prefix_str = "TBS";
+
+  static constexpr const char* _type_key = "auto_scheduler.ThreadBindStartStepNode";
+  TVM_DECLARE_FINAL_OBJECT_INFO(ThreadBindStartStepNode, StepNode);
+};
+
 /*!
  * \brief Managed reference to SplitStepNode.
  * \sa SplitStepNode
@@ -571,6 +820,122 @@ class SplitStep : public Step {
   explicit SplitStep(dmlc::JSONReader* reader);
 
   TVM_DEFINE_OBJECT_REF_METHODS(SplitStep, Step, SplitStepNode);
+};
+
+class SplitCopyStep : public Step {
+ public:
+  /*!
+   * \brief The constructor.
+   * \param stage_id The index of the stage to be split.
+   * \param iter_id The index of the iterator to be split.
+   * \param extent The extent length of the axis to split.
+   * \param lengths The multiple split factors. Can be None to be filled by search policy.
+   * \param inner_to_outer The split direction.
+   */
+  SplitCopyStep(int stage_id, int iter_id, Optional<PrimExpr> extent, 
+                const Array<Optional<Integer>>& lengths, bool inner_to_outer);
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit SplitCopyStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(SplitCopyStep, Step, SplitCopyStepNode);
+};
+
+class PromptStep : public Step {
+ public:
+  PromptStep(int any) {
+    auto node = make_object<PromptStepNode>();
+    data_ = std::move(node);
+  }
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit PromptStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(PromptStep, Step, PromptStepNode);
+};
+
+class SplitStartStep : public Step {
+ public:
+  SplitStartStep(int any) {
+    auto node = make_object<SplitStartStepNode>();
+    data_ = std::move(node);
+  }
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit SplitStartStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(SplitStartStep, Step, SplitStartStepNode);
+};
+
+class ComputeLocationStartStep : public Step {
+ public:
+  ComputeLocationStartStep(const Array<Integer>& stage_ids);
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit ComputeLocationStartStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(ComputeLocationStartStep, Step, ComputeLocationStartStepNode);
+};
+
+class UnrollStartStep : public Step {
+ public:
+  UnrollStartStep(const Array<Integer>& stage_ids);
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit UnrollStartStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(UnrollStartStep, Step, UnrollStartStepNode);
+};
+
+class VectorizationStartStep : public Step {
+ public:
+  VectorizationStartStep(const Array<Integer>& stage_ids);
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit VectorizationStartStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(VectorizationStartStep, Step, VectorizationStartStepNode);
+};
+
+class ThreadBindStartStep : public Step {
+ public:
+  ThreadBindStartStep(int any) {
+    auto node = make_object<ThreadBindStartStepNode>();
+    data_ = std::move(node);
+  }
+
+  /*!
+   * \brief The constructor used to read a step record from JSONReader and create the
+   * corresponding step.
+   * \param reader The input JSONReader.
+   */
+  explicit ThreadBindStartStep(dmlc::JSONReader* reader);
+
+  TVM_DEFINE_OBJECT_REF_METHODS(ThreadBindStartStep, Step, ThreadBindStartStepNode);
 };
 
 /*! \brief Similar to SplitStepNode, but uses split factors from another step

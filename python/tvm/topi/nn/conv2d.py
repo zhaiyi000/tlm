@@ -944,7 +944,7 @@ def conv(
     return out
 
 
-def group_conv2d_nhwc(Input, Filter, stride, padding, dilation, groups, out_dtype=None):
+def group_conv2d_nhwc(Input, Filter, stride, padding, dilation, groups, out_dtype=None, auto_scheduler_rewritten_layout=""):
     """Group convolution operator in NHWC layout.
 
     Parameters
@@ -978,7 +978,7 @@ def group_conv2d_nhwc(Input, Filter, stride, padding, dilation, groups, out_dtyp
         4-D with shape [batch, out_height, out_width, out_channel]
     """
     return conv(
-        Input, Filter, stride, padding, dilation, groups, "NHWC", "HWIO", out_dtype=out_dtype
+        Input, Filter, stride, padding, dilation, groups, "NHWC", "HWIO", out_dtype=out_dtype, auto_scheduler_rewritten_layout=auto_scheduler_rewritten_layout
     )
 
 

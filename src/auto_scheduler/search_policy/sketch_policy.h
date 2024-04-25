@@ -130,6 +130,8 @@ class SketchPolicyNode : public SearchPolicyNode {
    */
   Array<State> SampleInitPopulation(const Array<State>& sketches);
 
+  Array<State> GenStates(const Array<State>& states, const PackedFunc &gen_func);
+
   /*!
    * \brief Perform evolutionary search.
    * \param init_populations The states generated from init population.

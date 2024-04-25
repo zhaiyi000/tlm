@@ -63,6 +63,11 @@ def _build_dataset() -> List[Tuple[str, List[int]]]:
     return network_keys
 
 
+def build_network_keys():
+    keys = _build_dataset()
+    return keys
+
+
 def main():
     model_cache_dir = args.model_cache_dir
     try:

@@ -64,6 +64,10 @@ void JSONFileAppendLine(const String& path, const std::string& line) {
   CHECK(os.good()) << "ValueError: Cannot open the file to write: " << path;
   os << line << std::endl;
 }
+void JSONFileClearLine(const String& path) {
+  std::ofstream os(path);
+  CHECK(os.good()) << "ValueError: Cannot open the file to write: " << path;
+}
 
 /*! \brief The default database implementation, which mimics two database tables with two files. */
 class JSONDatabaseNode : public DatabaseNode {
@@ -156,6 +160,14 @@ class JSONDatabaseNode : public DatabaseNode {
   }
 
   int64_t Size() { return tuning_records_.size(); }
+
+  String GetHash(const IRModule &mod) const {
+    return String(std::to_string(GetModuleEquality().Hash(mod)));
+  }
+
+  bool CheckEqual(const IRModule &lhs, const IRModule &rhs) const {
+    return GetModuleEquality().Equal(lhs, rhs);
+  }
 };
 
 Database Database::JSONDatabase(String path_workload, String path_tuning_record, bool allow_missing,
@@ -177,6 +189,7 @@ Database Database::JSONDatabase(String path_workload, String path_tuning_record,
       if (recalc_hash != workload->shash) {
         ObjectPtr<WorkloadNode> wkl = make_object<WorkloadNode>(*workload.get());
         wkl->shash = recalc_hash;
+        wkl->shash_str = String(std::to_string(wkl->shash));
         workload = Workload(wkl);
       }
       n->workloads2idx_.emplace(workload, i);
@@ -218,6 +231,9 @@ Database Database::JSONDatabase(String path_workload, String path_tuning_record,
 
 TVM_REGISTER_NODE_TYPE(JSONDatabaseNode);
 TVM_REGISTER_GLOBAL("meta_schedule.DatabaseJSONDatabase").set_body_typed(Database::JSONDatabase);
+
+TVM_REGISTER_GLOBAL("meta_schedule.JSONDatabaseGetHash").set_body_method<Database>(&DatabaseNode::GetHash);
+TVM_REGISTER_GLOBAL("meta_schedule.JSONDatabaseCheckEqual").set_body_method<Database>(&DatabaseNode::CheckEqual);
 
 }  // namespace meta_schedule
 }  // namespace tvm

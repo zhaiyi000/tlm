@@ -66,8 +66,12 @@ struct Handler<::tvm::Array<::tvm::Optional<::tvm::Integer>>> {
                            const ::tvm::Array<::tvm::Optional<::tvm::Integer>>& array) {
     writer->BeginArray(false);
     for (const auto& i : array) {
-      ICHECK(i);
-      writer->WriteArrayItem(i.value()->value);
+      // ICHECK(i);
+      if (i) {
+        writer->WriteArrayItem(i.value()->value);
+      } else {
+        writer->WriteArrayItem(-100);
+      }
     }
     writer->EndArray();
   }
@@ -140,6 +144,27 @@ StepNode* Step::CopyOnWrite() {
     } else if (const auto& ps = as<SplitStepNode>()) {
       auto n = make_object<SplitStepNode>(*ps);
       ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<SplitCopyStepNode>()) {
+      auto n = make_object<SplitCopyStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<PromptStepNode>()) {
+      auto n = make_object<PromptStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<ThreadBindStartStepNode>()) {
+      auto n = make_object<ThreadBindStartStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<SplitStartStepNode>()) {
+      auto n = make_object<SplitStartStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<ComputeLocationStartStepNode>()) {
+      auto n = make_object<ComputeLocationStartStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<UnrollStartStepNode>()) {
+      auto n = make_object<UnrollStartStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
+    } else if (const auto& ps = as<VectorizationStartStepNode>()) {
+      auto n = make_object<VectorizationStartStepNode>(*ps);
+      ObjectPtr<Object>(std::move(n)).swap(data_);
     } else if (const auto& ps = as<FollowSplitStepNode>()) {
       auto n = make_object<FollowSplitStepNode>(*ps);
       ObjectPtr<Object>(std::move(n)).swap(data_);
@@ -190,6 +215,20 @@ Step StepReadFromRecord(dmlc::JSONReader* reader) {
     return ReorderStep(reader);
   } else if (name == SplitStepNode::record_prefix_str) {
     return SplitStep(reader);
+  } else if (name == SplitCopyStepNode::record_prefix_str) {
+    return SplitCopyStep(reader);
+  } else if (name == PromptStepNode::record_prefix_str) {
+    return PromptStep(reader);
+  } else if (name == ThreadBindStartStepNode::record_prefix_str) {
+    return ThreadBindStartStep(reader);
+  } else if (name == SplitStartStepNode::record_prefix_str) {
+    return SplitStartStep(reader);
+  } else if (name == ComputeLocationStartStepNode::record_prefix_str) {
+    return ComputeLocationStartStep(reader);
+  } else if (name == UnrollStartStepNode::record_prefix_str) {
+    return UnrollStartStep(reader);
+  } else if (name == VectorizationStartStepNode::record_prefix_str) {
+    return VectorizationStartStep(reader);
   } else if (name == FollowSplitStepNode::record_prefix_str) {
     return FollowSplitStep(reader);
   } else if (name == FollowFusedSplitStepNode::record_prefix_str) {
@@ -226,6 +265,20 @@ void StepApplyToState(const Step& step, State* state, const ComputeDAG& dag) {
     ps->ApplyToState(state);
   } else if (auto ps = step.as<SplitStepNode>()) {
     ps->ApplyToState(state);
+  } else if (auto ps = step.as<SplitCopyStepNode>()) {
+    ps->ApplyToState(state);
+  } else if (auto ps = step.as<PromptStepNode>()) {
+    ps->ApplyToState(state);
+  } else if (auto ps = step.as<ThreadBindStartStepNode>()) {
+    ps->ApplyToState(state);
+  } else if (auto ps = step.as<SplitStartStepNode>()) {
+    ps->ApplyToState(state);
+  } else if (auto ps = step.as<ComputeLocationStartStepNode>()) {
+    ps->ApplyToState(state);
+  } else if (auto ps = step.as<UnrollStartStepNode>()) {
+    ps->ApplyToState(state);
+  } else if (auto ps = step.as<VectorizationStartStepNode>()) {
+    ps->ApplyToState(state);
   } else if (auto ps = step.as<FollowSplitStepNode>()) {
     ps->ApplyToState(state);
   } else if (auto ps = step.as<FollowFusedSplitStepNode>()) {
@@ -260,6 +313,20 @@ void StepApplyToSchedule(const Step& step, Array<te::Stage>* stages, StageToAxes
   } else if (auto ps = step.as<ReorderStepNode>()) {
     ps->ApplyToSchedule(stages, stage_to_axes);
   } else if (auto ps = step.as<SplitStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<SplitCopyStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<PromptStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<ThreadBindStartStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<SplitStartStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<ComputeLocationStartStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<UnrollStartStepNode>()) {
+    ps->ApplyToSchedule(stages, stage_to_axes);
+  } else if (auto ps = step.as<VectorizationStartStepNode>()) {
     ps->ApplyToSchedule(stages, stage_to_axes);
   } else if (auto ps = step.as<FollowSplitStepNode>()) {
     ps->ApplyToSchedule(stages, stage_to_axes, transform_steps);
@@ -296,6 +363,20 @@ String StepPrintAsPythonAPI(const Step& step, Array<te::Stage>* stages,
   } else if (auto ps = step.as<ReorderStepNode>()) {
     return ps->PrintAsPythonAPI(stages, stage_to_axes);
   } else if (auto ps = step.as<SplitStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<SplitCopyStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<PromptStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<ThreadBindStartStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<SplitStartStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<ComputeLocationStartStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<UnrollStartStepNode>()) {
+    return ps->PrintAsPythonAPI(stages, stage_to_axes);
+  } else if (auto ps = step.as<VectorizationStartStepNode>()) {
     return ps->PrintAsPythonAPI(stages, stage_to_axes);
   } else if (auto ps = step.as<FollowSplitStepNode>()) {
     return ps->PrintAsPythonAPI(stages, stage_to_axes, transform_steps);
@@ -1034,6 +1115,277 @@ Array<IterVar> SplitStepNode::ApplyToSchedule(Array<te::Stage>* stages,
 String SplitStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
                                        StageToAxesMap* stage_to_axes) const {
   return PrintSplitAsPythonAPI(stages, stage_to_axes, stage_id, iter_id, lengths, inner_to_outer);
+}
+
+/********** Split Copy **********/
+SplitCopyStep::SplitCopyStep(int stage_id, int iter_id, Optional<PrimExpr> extent,
+                             const Array<Optional<Integer>>& lengths, bool inner_to_outer) {
+  auto node = make_object<SplitCopyStepNode>();
+  node->stage_id = stage_id;
+  // Extent can be a irreducible expression in some special cases
+  if (extent && extent.value()->IsInstance<IntImmNode>()) {
+    node->extent = tvm::Downcast<Integer>(extent.value());
+  }
+  node->iter_id = iter_id;
+  node->lengths = lengths;
+  node->inner_to_outer = inner_to_outer;
+  data_ = std::move(node);
+}
+
+SplitCopyStep::SplitCopyStep(dmlc::JSONReader* reader) {
+  auto node = make_object<SplitCopyStepNode>();
+  bool s;
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->stage_id);
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->iter_id);
+  int int_val;
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&int_val);
+  if (int_val) {
+    node->extent = Integer(int_val);
+  }
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->lengths);
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->inner_to_outer);
+  data_ = std::move(node);
+}
+
+void SplitCopyStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+  writer->WriteArrayItem(stage_id);
+  writer->WriteArrayItem(iter_id);
+  writer->WriteArrayItem(extent ? GetIntImm(extent.value()) : 0);
+  writer->WriteArrayItem(lengths);
+  writer->WriteArrayItem(static_cast<int>(inner_to_outer));
+}
+
+void SplitCopyStepNode::ApplyToState(State* state) const {
+  StateNode* pstate = state->CopyOnWrite();
+  for (size_t step_id = 0; step_id < (*state)->transform_steps.size(); ++step_id) {
+    if (auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>()) {
+      if (ps->stage_id == stage_id && ps->iter_id == iter_id) {
+        pstate->transform_steps.Set(
+          step_id, 
+          SplitStep(ps->stage_id, ps->iter_id, ps->extent, lengths, ps->inner_to_outer));
+        break;
+      }
+    }
+  }
+}
+
+void SplitCopyStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String SplitCopyStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return PrintSplitAsPythonAPI(stages, stage_to_axes, stage_id, iter_id, lengths, inner_to_outer);
+}
+
+/********** Prompt **********/
+PromptStep::PromptStep(dmlc::JSONReader* reader) {
+  auto node = make_object<PromptStepNode>();
+  data_ = std::move(node);
+}
+
+void PromptStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+}
+
+void PromptStepNode::ApplyToState(State* state) const {
+  return;
+}
+
+void PromptStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String PromptStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return "";
+}
+
+/********** Split Start **********/
+SplitStartStep::SplitStartStep(dmlc::JSONReader* reader) {
+  auto node = make_object<SplitStartStepNode>();
+  data_ = std::move(node);
+}
+
+void SplitStartStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+}
+
+void SplitStartStepNode::ApplyToState(State* state) const {
+  return;
+}
+
+void SplitStartStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String SplitStartStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return "";
+}
+
+/********** Compute Location Start **********/
+ComputeLocationStartStep::ComputeLocationStartStep(const Array<Integer>& stage_ids) {
+  auto node = make_object<ComputeLocationStartStepNode>();
+  node->stage_ids = stage_ids;
+  data_ = std::move(node);
+}
+
+ComputeLocationStartStep::ComputeLocationStartStep(dmlc::JSONReader* reader) {
+  auto node = make_object<ComputeLocationStartStepNode>();
+  bool s;
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->stage_ids);
+  data_ = std::move(node);
+}
+
+void ComputeLocationStartStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+  writer->WriteArrayItem(stage_ids);
+}
+
+void ComputeLocationStartStepNode::ApplyToState(State* state) const {
+  return;
+}
+
+void ComputeLocationStartStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String ComputeLocationStartStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return "";
+}
+
+/********** Unroll Start **********/
+UnrollStartStep::UnrollStartStep(const Array<Integer>& stage_ids) {
+  auto node = make_object<UnrollStartStepNode>();
+  node->stage_ids = stage_ids;
+  data_ = std::move(node);
+}
+
+UnrollStartStep::UnrollStartStep(dmlc::JSONReader* reader) {
+  auto node = make_object<UnrollStartStepNode>();
+  bool s;
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->stage_ids);
+  data_ = std::move(node);
+}
+
+void UnrollStartStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+  writer->WriteArrayItem(stage_ids);
+}
+
+void UnrollStartStepNode::ApplyToState(State* state) const {
+  return;
+}
+
+void UnrollStartStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String UnrollStartStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return "";
+}
+
+/********** Vectorization Start **********/
+VectorizationStartStep::VectorizationStartStep(const Array<Integer>& stage_ids) {
+  auto node = make_object<VectorizationStartStepNode>();
+  node->stage_ids = stage_ids;
+  data_ = std::move(node);
+}
+
+VectorizationStartStep::VectorizationStartStep(dmlc::JSONReader* reader) {
+  auto node = make_object<VectorizationStartStepNode>();
+  bool s;
+  s = reader->NextArrayItem();
+  ICHECK(s);
+  reader->Read(&node->stage_ids);
+  data_ = std::move(node);
+}
+
+void VectorizationStartStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+  writer->WriteArrayItem(stage_ids);
+}
+
+void VectorizationStartStepNode::ApplyToState(State* state) const {
+  return;
+}
+
+void VectorizationStartStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String VectorizationStartStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return "";
+}
+
+/********** Thread Bind Start **********/
+ThreadBindStartStep::ThreadBindStartStep(dmlc::JSONReader* reader) {
+  auto node = make_object<ThreadBindStartStepNode>();
+  data_ = std::move(node);
+}
+
+void ThreadBindStartStepNode::WriteToRecord(dmlc::JSONWriter* writer) const {
+  writer->WriteArraySeperator();
+  writer->WriteString(record_prefix_str);
+}
+
+void ThreadBindStartStepNode::ApplyToState(State* state) const {
+  return;
+}
+
+void ThreadBindStartStepNode::ApplyToSchedule(Array<te::Stage>* stages,
+                                        StageToAxesMap* stage_to_axes) const {
+  return;
+}
+
+String ThreadBindStartStepNode::PrintAsPythonAPI(Array<te::Stage>* stages,
+                                           StageToAxesMap* stage_to_axes) const {
+  std::cout << "Not implemented" << std::endl;
+  LOG(FATAL) << "Not implemented";
+  return "";
 }
 
 /********** Follow Split **********/

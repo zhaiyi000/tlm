@@ -90,3 +90,9 @@ class JSONDatabase(Database):
             allow_missing,
             module_equality,
         )
+
+    def get_hash(self, mod):
+        return _ffi_api.JSONDatabaseGetHash(self, mod)
+    
+    def check_equal(self, lhs, rhs):
+        return _ffi_api.JSONDatabaseCheckEqual(self, lhs, rhs)

@@ -86,6 +86,7 @@ def _get_network(
             model = model(**params, weights=None)
         except TypeError:
             model = model(**params, pretrained=False)
+        model.eval()
 
         dtype = "float32"
         input_data = torch.randn(input_shape).type(  # pylint: disable=no-member
@@ -175,7 +176,7 @@ def _get_network(
             oshape=oshape,
             layout="NHWC",
         )
-        inputs = ("data", [100], "float32")
+        inputs = ("data", [batch_size, 100], "float32")
     else:
         raise ValueError("Invalid name: " + name)
 
@@ -240,9 +241,10 @@ def get_network(
     filename = f'relay-{name}-{layout}-{",".join(str(i) for i in input_shape)}.json'
     cached = _load_cache(cache_dir, filename)
     if cached is None:
-        with multiprocessing.Pool(processes=1) as pool:
-            result = pool.map(_get_network, [(name, input_shape, layout)])
-        ((mod, params_bytearray, inputs),) = result
+        # with multiprocessing.Pool(processes=1) as pool:
+        #     result = pool.map(_get_network, [(name, input_shape, layout)])
+        # ((mod, params_bytearray, inputs),) = result
+        mod, params_bytearray, inputs = _get_network((name, input_shape, layout))  # use mp kind of slow, not use may lead oom
         cached = [mod, params_bytearray, inputs]
         _save_cache(cache_dir, filename, cached)
     mod, params_bytearray, inputs = cached

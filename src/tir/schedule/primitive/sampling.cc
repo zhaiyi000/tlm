@@ -326,6 +326,9 @@ std::vector<int64_t> SamplePerfectTile(
     int64_t len = *extent;
     for (int i = n - 1; i > 0; --i) {
       int64_t& l = result[i];
+      if (l == 0) {
+        throw std::runtime_error("Division by zero.");
+      }
       // A previous decision could become invalid because of the change of outer tiles
       // To handle this case properly, we check if the tiling strategy is still perfect.
       // If not, we use a trivial default solution (1, 1, ..., 1, L) for rest of the tiles

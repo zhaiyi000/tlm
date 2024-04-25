@@ -38,6 +38,18 @@ TaskRecord::TaskRecord(TuneContext ctx, double task_weight) {
   this->data_ = std::move(n);
 }
 
+TaskRecord::TaskRecord(TuneContext ctx) {
+  ObjectPtr<TaskRecordNode> n = runtime::make_object<TaskRecordNode>();
+  n->ctx = ctx;
+  n->flop = 1.0;
+  ctx->Initialize();
+  this->data_ = std::move(n);
+}
+
+void SetMeasureCandidates(TaskRecordNode* self, const Array<MeasureCandidate>& candidates) {
+  self->measure_candidates = candidates;
+}
+
 void SendToBuilder(TaskRecordNode* self, const Builder& builder) {
   auto _ = Profiler::TimedScope("SendToBuilder");
   Array<MeasureCandidate> candidates = self->measure_candidates.value();
@@ -100,44 +112,71 @@ void TaskCleanUp(TaskRecordNode* self, int task_id, const Array<RunnerResult>& r
   int n = results.size();
   std::string name = self->ctx->task_name.value();
   const PackedFunc& logger = self->ctx->logger;
+  std::string msg;
   for (int i = 0; i < n; ++i) {
     const BuilderResult& builder_result = self->builder_results.value()[i];
     const MeasureCandidate& candidate = self->measure_candidates.value()[i];
     const RunnerResult& runner_result = results[i];
     Optional<String> error_msg = NullOpt;
-    int trials = self->latency_ms.size() + 1;
+    // int trials = self->latency_ms.size() + 1;
     double run_ms = 1e9;
     if ((error_msg = builder_result->error_msg)) {
       ++self->build_error_count;
+      msg += "B";
     } else if ((error_msg = runner_result->error_msg)) {
       ++self->run_error_count;
+      msg += "R";
     } else {
       run_ms = GetRunMsMedian(runner_result);
+      msg += "*";
     }
     self->latency_ms.push_back(run_ms);
-    if (error_msg) {
-      const tir::Schedule& sch = candidate->sch;
-      std::string err = error_msg.value();
-      TVM_PY_LOG(INFO, logger) << std::fixed << std::setprecision(4)  //
-                               << "[Task #" << task_id << ": " << name << "] Trial #" << trials
-                               << ": Error in "
-                               << (builder_result->error_msg.defined() ? "building" : "running")
-                               << ":\n"
-                               << err << "\n"
-                               << sch->mod() << "\n"
-                               << Concat(sch->trace().value()->AsPython(false), "\n");
-    } else {
-      double best_ms = *std::min_element(self->latency_ms.begin(), self->latency_ms.end());
-      TVM_PY_LOG(INFO, logger) << std::fixed << std::setprecision(4)  //
-                               << "[Task #" << task_id << ": " << name << "] Trial #" << trials
-                               << ": GFLOPs: " << (self->flop / run_ms / 1e6)
-                               << ". Time: " << (run_ms * 1e3) << " us"
-                               << ". Best GFLOPs: " << (self->flop / best_ms / 1e6);
-    }
+    // if (error_msg) {
+    //   const tir::Schedule& sch = candidate->sch;
+    //   std::string err = error_msg.value();
+    //   TVM_PY_LOG(INFO, logger) << std::fixed << std::setprecision(4)  //
+    //                            << "[Task #" << task_id << ": " << name << "] Trial #" << trials
+    //                            << ": Error in "
+    //                            << (builder_result->error_msg.defined() ? "building" : "running")
+    //                            << ":\n"
+    //                            << err << "\n"
+    //                            << sch->mod() << "\n"
+    //                            << Concat(sch->trace().value()->AsPython(false), "\n");
+    // } else {
+    //   double best_ms = *std::min_element(self->latency_ms.begin(), self->latency_ms.end());
+    //   TVM_PY_LOG(INFO, logger) << std::fixed << std::setprecision(4)  //
+    //                            << "[Task #" << task_id << ": " << name << "] Trial #" << trials
+    //                            << ": GFLOPs: " << (self->flop / run_ms / 1e6)
+    //                            << ". Time: " << (run_ms * 1e3) << " us"
+    //                            << ". Best GFLOPs: " << (self->flop / best_ms / 1e6);
+    // }
   }
+  TVM_PY_LOG(INFO, logger) << msg;
   self->measure_candidates = NullOpt;
   self->builder_results = NullOpt;
   self->runner_futures = NullOpt;
+}
+
+Array<RunnerResult> JoinRunningTask(TaskRecordNode* task) {
+  ICHECK(task->runner_futures.defined());
+  Array<RunnerResult> results;
+  {
+    auto _ = Profiler::TimedScope("JoinRunnerFutures");
+    Array<RunnerFuture> futures = task->runner_futures.value();
+    results.reserve(futures.size());
+    for (RunnerFuture future : futures) {
+      results.push_back(future->Result());
+    }
+  }
+  ICHECK(task->measure_candidates.defined());
+  if (task->ctx->search_strategy.defined()) {
+    task->ctx->search_strategy.value()->NotifyRunnerResults(task->measure_candidates.value(),
+                                                          results);
+  }
+  ICHECK(task->builder_results.defined());
+  ICHECK_EQ(results.size(), task->measure_candidates.value().size());
+  ICHECK_EQ(results.size(), task->builder_results.value().size());
+  return results;
 }
 
 void TaskSchedulerNode::Tune(Array<TuneContext> ctxs, Array<FloatImm> task_weights,
@@ -361,6 +400,131 @@ void PyTaskSchedulerNode::Tune(Array<TuneContext> tasks, Array<FloatImm> task_we
   }
 }
 
+void TaskSchedulerNode::DumpProgram(Array<TuneContext> ctxs, Array<FloatImm> task_weights,
+                             int max_trials_global, int max_trials_per_task,
+                             int num_trials_per_iter, Builder builder, Runner runner,
+                             Array<MeasureCallback> measure_callbacks, Optional<Database> database,
+                             Optional<CostModel> cost_model) {
+  CHECK_EQ(ctxs.size(), 1);
+  CHECK_EQ(ctxs.size(), task_weights.size()) << "ValueError: `task_weights` must have the same "
+                                                "length as `ctxs`";
+  int n_tasks = this->remaining_tasks_ = ctxs.size();
+  this->measure_callbacks_ = measure_callbacks;
+  this->database_ = database;
+  this->cost_model_ = cost_model;
+  this->tasks_.clear();
+  this->tasks_.reserve(n_tasks);
+  for (int i = 0; i < n_tasks; ++i) {
+    const TuneContext& ctx = ctxs[i];
+    double weight = task_weights[i]->value;
+    TVM_PY_LOG(INFO, this->logger) << "Initializing Task #" << i << ": " << ctx->task_name;
+    TVM_PY_LOG(INFO, ctx->logger) << "Initializing Task #" << i << ": " << ctx->task_name;
+    this->tasks_.push_back(TaskRecord(ctx, weight));
+    Array<tir::Schedule> design_spaces =
+        ctx->space_generator.value()->GenerateDesignSpace(ctx->mod.value());
+    TVM_PY_LOG(INFO, ctx->logger) << "Total " << design_spaces.size()
+                                  << " design space(s) generated";
+    for (int i = 0, n = design_spaces.size(); i < n; ++i) {
+      tir::Schedule sch = design_spaces[i];
+      tir::Trace trace = sch->trace().value();
+      trace = trace->Simplified(true);
+      TVM_PY_LOG(INFO, ctx->logger) << "Design space #" << i << ":\n"
+                                    << sch->mod() << "\n"
+                                    << Concat(trace->AsPython(false), "\n");
+    }
+    ctx->search_strategy.value()->PreTuning(max_trials_per_task, num_trials_per_iter, design_spaces,
+                                            database, cost_model);
+  }
+  const TuneContext& ctx = ctxs[0];
+  Array<tir::Schedule> populations = ctx->search_strategy.value()->GeneratePopulations();
+  Workload workload = this->database_.value()->CommitWorkload(ctx->mod.value());
+  for (const tir::Schedule &sch : populations) {
+    this->database_.value()->CommitTuningRecord(TuningRecord(
+            /*trace=*/sch->trace().value(),
+            /*workload=*/workload,
+            /*run_secs=*/Array<FloatImm>{FloatImm(DataType::Float(32), 0)},
+            /*target=*/ctx->target.value(),
+            /*args_info=*/ArgInfo::FromEntryFunc(sch->mod(), /*remove_preproc=*/true)));
+  }
+}
+
+void TaskSchedulerNode::GenState(Array<TuneContext> ctxs, Array<FloatImm> task_weights,
+                             int max_trials_global, int max_trials_per_task,
+                             int num_trials_per_iter, Builder builder, Runner runner,
+                             Array<MeasureCallback> measure_callbacks, Optional<Database> database,
+                             Optional<CostModel> cost_model,
+                             Array<Array<String>> decision_tokens,
+                             Database commit_database,
+                             bool is_build) {
+  CHECK_EQ(ctxs.size(), 1);
+  CHECK_EQ(ctxs.size(), task_weights.size()) << "ValueError: `task_weights` must have the same "
+                                                "length as `ctxs`";
+  int n_tasks = this->remaining_tasks_ = ctxs.size();
+  this->measure_callbacks_ = measure_callbacks;
+  this->database_ = database;
+  this->cost_model_ = cost_model;
+  this->tasks_.clear();
+  this->tasks_.reserve(n_tasks);
+  for (int i = 0; i < n_tasks; ++i) {
+    const TuneContext& ctx = ctxs[i];
+    double weight = task_weights[i]->value;
+    // TVM_PY_LOG(INFO, this->logger) << "Initializing Task #" << i << ": " << ctx->task_name;
+    // TVM_PY_LOG(INFO, ctx->logger) << "Initializing Task #" << i << ": " << ctx->task_name;
+    this->tasks_.push_back(TaskRecord(ctx, weight));
+    // Array<tir::Schedule> design_spaces =
+    //     ctx->space_generator.value()->GenerateDesignSpace(ctx->mod.value());
+    Array<tir::Schedule> design_spaces;
+    // TVM_PY_LOG(INFO, ctx->logger) << "Total " << design_spaces.size()
+    //                               << " design space(s) generated";
+    // for (int i = 0, n = design_spaces.size(); i < n; ++i) {
+    //   tir::Schedule sch = design_spaces[i];
+    //   tir::Trace trace = sch->trace().value();
+    //   trace = trace->Simplified(true);
+    //   TVM_PY_LOG(INFO, ctx->logger) << "Design space #" << i << ":\n"
+    //                                 << sch->mod() << "\n"
+    //                                 << Concat(trace->AsPython(false), "\n");
+    // }
+    ctx->search_strategy.value()->PreTuning(max_trials_per_task, num_trials_per_iter, design_spaces,
+                                            database, cost_model);
+  }
+  const TuneContext& ctx = ctxs[0];
+  std::vector<tir::Schedule> out_schs = ctx->search_strategy.value()->ApplyDecisions(decision_tokens);
+  Workload workload = commit_database->CommitWorkload(ctx->mod.value());
+
+  std::vector<TuningRecord> records;
+  std::vector<BuilderInput> inputs;
+  for (const tir::Schedule &sch : out_schs) {
+    const auto record = TuningRecord(
+            /*trace=*/sch->trace().value(),
+            /*workload=*/workload,
+            /*run_secs=*/Array<FloatImm>{FloatImm(DataType::Float(32), 0)},
+            /*target=*/ctx->target.value(),
+            /*args_info=*/ArgInfo::FromEntryFunc(sch->mod(), /*remove_preproc=*/true));
+    records.push_back(record);
+    inputs.push_back(BuilderInput(record->AsMeasureCandidate()->sch->mod(), ctx->target.value()));
+  }
+
+  const auto default_builder_result = BuilderResult(NullOpt, NullOpt);
+  Array<BuilderResult> builder_results;
+  if (is_build) {
+    builder_results = builder->Build(inputs);
+  } else {
+    for (size_t i = 0; i < inputs.size(); i++) {
+      builder_results.push_back(default_builder_result);
+    }
+  }
+
+  for (size_t i = 0; i < builder_results.size(); i++) {
+    const auto &result = builder_results[i];
+    if (result->error_msg.defined() == false) {
+      commit_database->CommitTuningRecord(records[i]);
+    }
+    // else {
+    //   std::cout << "build error" << std::endl;
+    // }
+  }
+}
+
 TVM_REGISTER_NODE_TYPE(TaskRecordNode);
 TVM_REGISTER_OBJECT_TYPE(TaskSchedulerNode);
 TVM_REGISTER_NODE_TYPE(PyTaskSchedulerNode);
@@ -368,6 +532,10 @@ TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerPyTaskScheduler")
     .set_body_typed(TaskScheduler::PyTaskScheduler);
 TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTune")
     .set_body_method<TaskScheduler>(&TaskSchedulerNode::Tune);
+TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerDumpProgram")
+    .set_body_method<TaskScheduler>(&TaskSchedulerNode::DumpProgram);
+TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerGenState")
+    .set_body_method<TaskScheduler>(&TaskSchedulerNode::GenState);
 TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerJoinRunningTask")
     .set_body_method<TaskScheduler>(&TaskSchedulerNode::JoinRunningTask);
 TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerNextTaskId")
@@ -379,5 +547,35 @@ TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTouchTask")
 TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerPrintTuningStatistics")
     .set_body_method<TaskScheduler>(&TaskSchedulerNode::PrintTuningStatistics);
 
+TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTaskRecord")
+    .set_body_typed([](TuneContext ctx) {
+      return TaskRecord(ctx);
+    });
+
+TVM_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTaskRecordWithWeight")
+    .set_body_typed([](TuneContext ctx, double weight) {
+      return TaskRecord(ctx, weight);
+    });
+
+TVM_REGISTER_GLOBAL("meta_schedule.TuneContextSetMeasureCandidates")
+    .set_body_typed([](const TaskRecord& task_record, const Array<MeasureCandidate>& candidates) {
+      SetMeasureCandidates(task_record.get(), candidates);
+    });
+TVM_REGISTER_GLOBAL("meta_schedule.TuneContextSendToBuilder")
+    .set_body_typed([](const TaskRecord& task_record, const Builder& builder) {
+      SendToBuilder(task_record.get(), builder);
+    });
+TVM_REGISTER_GLOBAL("meta_schedule.TuneContextSendToRunner")
+    .set_body_typed([](const TaskRecord& task_record, const Runner& runner) {
+      SendToRunner(task_record.get(), runner);
+    });
+TVM_REGISTER_GLOBAL("meta_schedule.TuneContextJoin")
+    .set_body_typed([](const TaskRecord& task_record) {
+      return JoinRunningTask(task_record.get());
+    });
+TVM_REGISTER_GLOBAL("meta_schedule.TuneContextClearMeasureState")
+    .set_body_typed([](const TaskRecord& task_record, const Array<RunnerResult>& results) {
+      TaskCleanUp(task_record.get(), 0, results);
+    });
 }  // namespace meta_schedule
 }  // namespace tvm

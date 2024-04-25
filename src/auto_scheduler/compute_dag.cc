@@ -1306,6 +1306,29 @@ String ComputeDAG::PrintDAG(bool simple_mode) const {
   return String(ss.str());
 }
 
+String ComputeDAG::PrintDAGMin() const {
+  std::stringstream ss;
+
+  for (const auto& op : operator->()->ops) {
+    if (op->IsInstance<te::PlaceholderOpNode>()) {
+      ss << op->name << " ";
+    } else if (auto pop = op.as<te::ComputeOpNode>()) {
+      for (size_t k = 0; k < pop->body.size(); ++k) {
+        ss << op->name << " ";
+      }
+    } else {
+      LOG(FATAL) << "Invalid op";
+    }
+  }
+
+  std::string result = ss.str();
+  if (!result.empty() && result[result.length() - 1] == ' ') {
+      result.erase(result.length() - 1);
+  }
+
+  return String(result);
+}
+
 State ComputeDAG::InferBound(const State& state) const {
   ICHECK(state->concrete) << "Only concrete state can be processed to get bound info.";
 
@@ -1495,6 +1518,11 @@ TVM_REGISTER_GLOBAL("auto_scheduler.ComputeDAGPrintPythonCodeFromState")
 TVM_REGISTER_GLOBAL("auto_scheduler.ComputeDAGPrintDAG")
     .set_body_typed([](const ComputeDAG& dag, bool simple_mode) {
       return dag.PrintDAG(simple_mode);
+    });
+
+TVM_REGISTER_GLOBAL("auto_scheduler.ComputeDAGPrintDAGMin")
+    .set_body_typed([](const ComputeDAG& dag) {
+      return dag.PrintDAGMin();
     });
 
 TVM_REGISTER_GLOBAL("auto_scheduler.ComputeDAGInferBoundFromState")

@@ -488,6 +488,96 @@ std::vector<std::pair<State, int>> RuleCustomSketch::Apply(const SketchPolicyNod
   return ret;
 }
 
+void MutateTileSize(State *state, size_t step_id, std::mt19937* rand_gen, SketchPolicyNode* policy) {
+  SplitFactorizationMemo split_memo;
+  int max_innermost_split_factor = GetIntParam(policy->params, SketchParamKey::max_innermost_split_factor);
+  auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>();
+  int64_t extent = GetIntImm(ps->extent.value());
+  // if (extent <= 1) {
+  //   state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+  //                       ps->lengths, 
+  //                       ps->inner_to_outer);
+  //   return;
+  // }
+
+  // Fetch the current tile sizes.
+  std::vector<int> lengths(ps->lengths.size() + 1, 1);
+  for (int i = 0; i < static_cast<int>(ps->lengths.size()); ++i) {
+    lengths[i + 1] = GetIntImm(ps->lengths[i].value());
+  }
+  lengths[0] = extent / ElementProduct(lengths);
+
+  // Random permute the tile size order.
+  std::vector<int> random_perm;
+  RandomPermutation(lengths.size(), &random_perm, rand_gen);
+  std::vector<int> new_lengths;
+
+  // Try to divide a factor from one tile size and multiple it to another.
+  for (size_t i = 0; i < random_perm.size(); ++i) {
+    size_t src_idx = random_perm[i];
+    int length = lengths[src_idx];
+    if (length <= 1) {
+      continue;
+    }
+
+    // Divide one factor from lengths[src_idx] and multiply it to lengths[dst_idx]
+    size_t dst_idx = random_perm[(i + 1) % random_perm.size()];
+    const std::vector<int>& factors = split_memo.GetFactors(length);
+    ICHECK_GE(factors.size(), 1);
+
+    int divide_factor;
+    if (dst_idx == lengths.size() - 1) {
+      // Maintain the restriction of hardware_params.max_innermost_split_factor.
+      int max_factor_index = static_cast<int>(factors.size()) - 1;
+      for (; max_factor_index >= 1; max_factor_index--) {
+        if (factors[max_factor_index] * lengths[dst_idx] <= max_innermost_split_factor) {
+          break;
+        }
+      }
+      if (max_factor_index == 0) {
+        // Failed on this dst_idx, try next one.
+        continue;
+      }
+      divide_factor = factors[(*rand_gen)() % (max_factor_index + 1)];
+    } else {
+      divide_factor = factors[(*rand_gen)() % (factors.size())];
+    }
+
+    // Divide one factor from lengths[src_idx] and multiply it to lengths[dst_idx].
+    // Array<Integer> new_lengths;
+    new_lengths.push_back(1);
+    for (size_t j = 1; j < lengths.size(); ++j) {
+      if (j == src_idx) {
+        new_lengths.push_back(lengths[j] / divide_factor);
+      } else if (j == dst_idx) {
+        new_lengths.push_back(lengths[j] * divide_factor);
+      } else {
+        new_lengths.push_back(lengths[j]);
+      }
+    }
+    new_lengths[0] = extent / ElementProduct(new_lengths);
+
+    ICHECK_LE(GetIntImm(new_lengths.back()), max_innermost_split_factor);
+
+    lengths = new_lengths;
+    new_lengths.clear();
+
+    // StateNode* pstate = state->CopyOnWrite();
+    // pstate->transform_steps.Set(
+    //     step_id, SplitStep(ps->stage_id, ps->iter_id, ps->extent,
+    //                        Array<Optional<Integer>>(new_lengths.begin(), new_lengths.end()),
+    //                        ps->inner_to_outer));
+  }
+  Array<Integer> new_lengths_tmp;
+  for (size_t j = 1; j < lengths.size(); ++j) {
+    const int& len = lengths[j];
+    new_lengths_tmp.push_back(Integer(len));
+  }
+  state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+                        Array<Optional<Integer>>(new_lengths_tmp.begin(), new_lengths_tmp.end()), 
+                        ps->inner_to_outer);
+}
+
 /********** Init Population **********/
 
 PopulationGenerationRule::ResultKind InitFillTileSize::Apply(SketchPolicyNode* policy, State* state,
@@ -508,6 +598,7 @@ PopulationGenerationRule::ResultKind InitFillTileSize::Apply(SketchPolicyNode* p
         }
       }
       if (all_defined) {
+        MutateTileSize(state, step_id, rand_gen, policy);
         continue;
       }
 
@@ -518,11 +609,14 @@ PopulationGenerationRule::ResultKind InitFillTileSize::Apply(SketchPolicyNode* p
       ICHECK(!candidate_lens.empty());
       const auto& candidate_lengths = candidate_lens[(*rand_gen)() % candidate_lens.size()];
 
-      pstate->transform_steps.Set(
-          step_id,
-          SplitStep(ps->stage_id, ps->iter_id, ps->extent,
-                    Array<Optional<Integer>>(candidate_lengths.begin(), candidate_lengths.end()),
-                    ps->inner_to_outer));
+      // pstate->transform_steps.Set(
+      //     step_id,
+      //     SplitStep(ps->stage_id, ps->iter_id, ps->extent,
+      //               Array<Optional<Integer>>(candidate_lengths.begin(), candidate_lengths.end()),
+      //               ps->inner_to_outer));
+      state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+                        Array<Optional<Integer>>(candidate_lengths.begin(), candidate_lengths.end()), 
+                        ps->inner_to_outer);
     }
   }
   pstate->concrete = true;
@@ -535,6 +629,21 @@ PopulationGenerationRule::ResultKind InitChangeComputeLocation::Apply(
   if (GetIntParam(policy->params, SketchParamKey::disable_change_compute_location)) {
     return ResultKind::kValid;
   }
+
+  Array<Integer> stage_ids;
+  for (int stage_id = static_cast<int>((*state)->stages.size()) - 1; stage_id >= 0; stage_id--) {
+    const Stage& stage = (*state)->stages[stage_id];
+    // Skip the inlined stages and placeholders
+    if (stage->op_type == StageKind::kPlaceholder || stage->compute_at == ComputeAtKind::kInlined) {
+      continue;
+    }
+    // Skip the tiled stages
+    if (IsTiled(stage) || NeedsMultilevelTiling(policy->search_task, *state, stage_id)) {
+      continue;
+    }
+    stage_ids.push_back(Integer(stage_id));
+  }
+  state->compute_location_start(stage_ids);
 
   for (int stage_id = static_cast<int>((*state)->stages.size()) - 1; stage_id >= 0; stage_id--) {
     const Stage& stage = (*state)->stages[stage_id];
@@ -646,6 +755,21 @@ PopulationGenerationRule::ResultKind InitUnroll::Apply(SketchPolicyNode* policy,
                                                        std::mt19937* rand_gen) const {
   std::vector<int>& auto_unroll_configs =
       IsGPUTask(policy->search_task) ? auto_unroll_configs_gpu : auto_unroll_configs_cpu;
+
+  Array<Integer> stage_ids;
+  for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
+    const Stage& stage = (*state)->stages[stage_id];
+    // Skip the inlined stage and placeholder stage
+    if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+      continue;
+    }
+
+    if (HasReduceIter(stage)) {
+      stage_ids.push_back(Integer(stage_id));
+    }
+  }
+  state->unroll_start(stage_ids);
+
   for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
     const Stage& stage = (*state)->stages[stage_id];
     // Skip the inlined stage and placeholder stage
@@ -696,6 +820,54 @@ PopulationGenerationRule::ResultKind InitUnroll::Apply(SketchPolicyNode* policy,
 PopulationGenerationRule::ResultKind InitVectorization::Apply(SketchPolicyNode* policy,
                                                               State* state,
                                                               std::mt19937* rand_gen) const {
+  Array<Integer> stage_ids;
+  for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
+    const Stage& stage = (*state)->stages[stage_id];
+    // Skip the inlined stage and placeholder stage
+    if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+      continue;
+    }
+
+    // Try to fuse and vectorize the space iterators in the inner most tile
+    int64_t cum_length_prod = 1;
+
+    int num_fusible = 0;
+    while (num_fusible < static_cast<int>(stage->iters.size())) {
+      int iter_id = static_cast<int>(stage->iters.size()) - 1 - num_fusible;
+      // Stop if this iterator has been a compute at attach point
+      if ((*state)->attach_map->iter_to_attached_stages.count(std::make_pair(stage_id, iter_id))) {
+        break;
+      }
+
+      const Iterator& it = stage->iters[iter_id];
+      // Stop if we meet a reduce iterator or annotated iterator
+      if (it->iter_kind == IteratorKind::kReduction ||
+          it->annotation != IteratorAnnotation::kNone) {
+        break;
+      }
+
+      // Stop if the memory access is not continuous (vectorizable)
+      // Note: The check is too hard, so we use heuristic here
+      if (IsTiled(stage) && num_fusible != 0) {
+        // If the stage is tiled, then the memory access must not be continuous
+        // for the innermost two iterators
+        break;
+      }
+
+      cum_length_prod *= GetExtent(it);
+      if (cum_length_prod > GetIntParam(policy->params, SketchParamKey::max_vectorize_size)) {
+        break;
+      }
+
+      num_fusible++;
+    }
+
+    if (num_fusible > 0) {
+      stage_ids.push_back(Integer(stage_id));
+    }
+  }
+  state->vectorization_start(stage_ids);
+
   for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
     const Stage& stage = (*state)->stages[stage_id];
     // Skip the inlined stage and placeholder stage
@@ -906,6 +1078,43 @@ PopulationGenerationRule::ResultKind InitThreadBind::Apply(SketchPolicyNode* pol
       state->bind(stage_id, iters1[1], IteratorAnnotation::kThreadX);
     }
   }
+
+  state->thread_bind_start();
+
+  // SplitFactorizationMemo split_memo;
+  // int max_innermost_split_factor =
+  //     GetIntParam(policy->params, SketchParamKey::max_innermost_split_factor);
+
+  // Scan the transformation history and randomly fill tiles size for all SplitStep
+  int ppt_id = -1;
+  for (size_t step_id = 0; step_id < (*state)->transform_steps.size(); ++step_id) {
+    if ((*state)->transform_steps[step_id].as<PromptStepNode>()) {
+      ppt_id = static_cast<int>(step_id);
+    }
+    if (ppt_id == -1) {
+      continue;
+    }
+
+    if (auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>()) {
+      if (ps->extent) {
+      //   int extent = GetIntImm(ps->extent.value());
+      //   const auto& candidate_lens = split_memo.GetFactorizationSchemes(extent, ps->lengths.size(),
+      //                                                                   max_innermost_split_factor);
+      //   ICHECK(!candidate_lens.empty());
+      //   const auto& candidate_lengths = candidate_lens[(*rand_gen)() % candidate_lens.size()];
+
+      //   state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+      //                     Array<Optional<Integer>>(candidate_lengths.begin(), candidate_lengths.end()), 
+      //                     ps->inner_to_outer);
+        MutateTileSize(state, step_id, rand_gen, policy);
+      } else {
+        state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+                          ps->lengths, 
+                          ps->inner_to_outer);
+      }
+    }
+  }
+
   return ResultKind::kValid;
 }
 
@@ -1235,6 +1444,757 @@ PopulationGenerationRule::ResultKind MutateParallel::Apply(SketchPolicyNode* pol
 
   *state = tmp_s;
   return ResultKind::kValid;
+}
+
+
+using SequenceTokenType = std::vector<std::vector<std::string>>;
+
+SequenceTokenType arr2vec(Array<Array<String>> arr) {
+  SequenceTokenType vec(arr.size());
+  for (size_t i = 0; i < arr.size(); i++) {
+    vec[i] = std::vector<std::string>(arr[i].size());
+    for (size_t j = 0; j < arr[i].size(); j++) {
+      vec[i][j] = arr[i][j];
+      // vec[i][j] = std::vector<std::string>(arr[i][j].size());
+      // for (size_t k = 0; k < arr[i][j].size(); k++) {
+      //   vec[i][j][k] = arr[i][j][k];
+      // }
+    }
+  }
+  return vec;
+}
+
+Array<State> InitFillTileSize::Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const {
+  int gen_len_max = 0;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    int gen_len = 0;
+    const State& temp_state = states[state_i];
+    const State* state = &temp_state;
+    for (size_t step_id = 0; step_id < (*state)->transform_steps.size(); ++step_id) {
+      if (auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>()) {
+        gen_len += (ps->lengths.size() + 5);
+      }
+    }
+    gen_len_max = std::max(gen_len_max, gen_len);
+  }
+  SequenceTokenType sequence_tokens = arr2vec(gen_func(policy->search_task, states, gen_len_max));
+  const auto device_type = policy->search_task->target->GetTargetDeviceType();
+  
+  Array<State> ret_array;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    const auto &tokens = sequence_tokens[state_i];
+    int token_idx = 0;
+    size_t step_id = 0;
+    State tmp_s = states[state_i];
+    State *state = &tmp_s;
+    for (; step_id < (*state)->transform_steps.size(); ++step_id) {
+      if (auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>()) {
+        try {
+          ICHECK(ps->extent);
+          int extent = GetIntImm(ps->extent.value());
+          if (tokens.at(token_idx++) != "SPC") break;
+          if (std::stoi(tokens.at(token_idx++)) != ps->stage_id) break;
+          if (std::stoi(tokens.at(token_idx++)) != ps->iter_id) break;
+          if (std::stoi(tokens.at(token_idx++)) != extent) break;
+          int extent_pord = 1;
+          Array<Integer> candidate_lengths;
+          for (size_t i = 0; i < ps->lengths.size(); i++) {
+            int factor = std::stoi(tokens.at(token_idx++));
+            extent_pord *= factor;
+            candidate_lengths.push_back(Integer(factor));
+          }
+          // if (extent_pord <= 0) break;
+          if (device_type == kDLCPU) {
+            if (extent_pord <= 0 || extent_pord > extent || extent % extent_pord != 0) break;
+          }
+          if (std::stoi(tokens.at(token_idx++)) != ps->inner_to_outer) break;
+          state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+                            Array<Optional<Integer>>(candidate_lengths.begin(), candidate_lengths.end()), 
+                            ps->inner_to_outer);
+        } catch (std::exception& e) {
+          break;
+        }
+      }
+    }
+    if (step_id == (*state)->transform_steps.size()) {
+      StateNode* pstate = state->CopyOnWrite();
+      pstate->concrete = true;
+      ret_array.push_back(tmp_s);
+    } else {
+      // std::cout << "" << std::endl;
+    }
+  }
+  std::cout << "ret array size: " << ret_array.size();
+  return ret_array;
+}
+
+Array<State> InitChangeComputeLocation::Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const {
+  if (GetIntParam(policy->params, SketchParamKey::disable_change_compute_location)) {
+    return states;
+  }
+
+  Array<State> states_prompt;
+  int gen_len_max = 0;
+  Array<Integer> stage_ids;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    State temp_state = states[state_i];
+    State* state = &temp_state;
+    int gen_len = 0;
+    for (int stage_id = static_cast<int>((*state)->stages.size()) - 1; stage_id >= 0; stage_id--) {
+      const Stage& stage = (*state)->stages[stage_id];
+      // Skip the inlined stages and placeholders
+      if (stage->op_type == StageKind::kPlaceholder || stage->compute_at == ComputeAtKind::kInlined) {
+        continue;
+      }
+      // Skip the tiled stages
+      if (IsTiled(stage) || NeedsMultilevelTiling(policy->search_task, (*state), stage_id)) {
+        continue;
+      }
+      stage_ids.push_back(Integer(stage_id));
+      gen_len += 4;
+    }
+    state->compute_location_start(stage_ids);
+    gen_len_max = std::max(gen_len_max, gen_len);
+    states_prompt.push_back(*state);
+    stage_ids.clear();
+  }
+  SequenceTokenType sequence_tokens = arr2vec(gen_func(policy->search_task, states_prompt, gen_len_max));
+  
+  Array<State> ret_array;
+  for (size_t state_i = 0; state_i < states_prompt.size(); state_i++) {
+    State tmp_s = states_prompt[state_i];
+    State *state = &tmp_s;
+    const auto &tokens = sequence_tokens[state_i];
+    int token_idx = 0;
+    int stage_id = static_cast<int>((*state)->stages.size()) - 1;
+    for (; stage_id >= 0; stage_id--) {
+      const Stage& stage = (*state)->stages[stage_id];
+      // Skip the inlined stages and placeholders
+      if (stage->op_type == StageKind::kPlaceholder || stage->compute_at == ComputeAtKind::kInlined) {
+        continue;
+      }
+      // Skip the tiled stages
+      if (IsTiled(stage) || NeedsMultilevelTiling(policy->search_task, (*state), stage_id)) {
+        continue;
+      }
+
+      try {
+        int stage_id_gen = std::stoi(tokens.at(token_idx + 1));
+        if (stage_id_gen < stage_id) break;
+        if (stage_id_gen > stage_id) continue;
+
+        const std::string &stepname = tokens.at(token_idx++);
+        token_idx++;  // for stage_id
+
+        if (stepname == "CI") {
+          if (!HasReduceIter(stage)) {
+            const auto& stage_to_attach_iter = (*state)->attach_map->stage_to_attach_iter;
+            if (stage_to_attach_iter.find(stage_id) != stage_to_attach_iter.end()) {
+              state->compute_inline(stage_id);
+            }
+          }
+        } else if (stepname == "CR") {
+          state->compute_root(stage_id);
+        } else if (stepname == "CA") {
+          std::vector<std::pair<int, int>> candidates = GetComputeLocationCandidates(policy->search_task, *state, stage_id);
+          int first = std::stoi(tokens.at(token_idx++));
+          int second = std::stoi(tokens.at(token_idx++));
+          if (std::find(candidates.begin(), candidates.end(), std::make_pair(first, second)) == candidates.end()) break;
+          const Stage& stage = (*state)->stages[first];
+          state->compute_at(stage_id, first, stage->iters[second]);
+        } else {
+          break;
+        }
+      } catch (std::exception& e) {
+        break;
+      }
+    }
+    if (stage_id == -1) {
+      try {
+        *state = policy->search_task->compute_dag.InferBound(*state);
+      } catch (std::exception& e) {}
+      ret_array.push_back(tmp_s);
+    } else {
+      // std::cout << "" << std::endl;
+    }
+  }
+
+  std::cout << ", " << ret_array.size();
+  return ret_array;
+}
+
+Array<State> InitParallel::Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const {
+  std::function<void(const SketchPolicyNode&, State*, int stage_id, int iter_offset)>
+      annotate_parallel;
+  annotate_parallel = [&annotate_parallel](const SketchPolicyNode& policy, State* state,
+                                           int stage_id, int iter_offset) {
+    const Stage& stage = (*state)->stages[stage_id];
+
+    Array<Iterator> to_fuse;
+    int64_t parallel_degree = 1;
+
+    // Try to fuse and parallel the outermost n iterators
+    // Stop if we meet reduce iterator or we have enough parallel degree
+    size_t iter_id = iter_offset;
+    for (; iter_id < stage->iters.size(); ++iter_id) {
+      const Iterator& it = stage->iters[iter_id];
+      if (it->iter_kind == IteratorKind::kReduction ||
+          it->annotation != IteratorAnnotation::kNone) {
+        break;
+      }
+      to_fuse.push_back(it);
+      parallel_degree *= GetExtent(it);
+
+      if (parallel_degree > policy.search_task->hardware_params->num_cores * 16) {
+        break;
+      }
+
+      if ((*state)->attach_map->iter_to_attached_stages.count(std::make_pair(stage_id, iter_id))) {
+        break;
+      }
+    }
+
+    if (parallel_degree == 1) {
+      auto res =
+          (*state)->attach_map->iter_to_attached_stages.find(std::make_pair(stage_id, iter_id));
+      if (res != (*state)->attach_map->iter_to_attached_stages.end()) {
+        for (int attached_stage_id : res->second) {
+          annotate_parallel(policy, state, attached_stage_id, 0);
+        }
+        annotate_parallel(policy, state, stage_id, iter_id + 1);
+      }
+    }
+
+    if (!to_fuse.empty()) {
+      if (to_fuse.size() == 1) {
+        state->parallel(stage_id, to_fuse[0]);
+      } else {
+        Iterator fused_iter = state->fuse(stage_id, to_fuse);
+        state->parallel(stage_id, fused_iter);
+      }
+    }
+  };
+
+  Array<State> ret_array;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    State tmp_s = states[state_i];
+    State *state = &tmp_s;
+
+    for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
+      const Stage& stage = (*state)->stages[stage_id];
+      if (stage->compute_at != ComputeAtKind::kRoot || stage->op_type == StageKind::kPlaceholder) {
+        continue;
+      }
+
+      annotate_parallel(*policy, state, stage_id, 0);
+    }
+    ret_array.push_back(tmp_s);
+  }
+
+  std::cout << ", " << ret_array.size();
+  return ret_array;
+}
+
+Array<State> InitUnroll::Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const {
+  std::vector<int>& auto_unroll_configs =
+      IsGPUTask(policy->search_task) ? auto_unroll_configs_gpu : auto_unroll_configs_cpu;
+
+  int gen_len_max = 0;
+  Array<Integer> stage_ids;
+  Array<State> states_prompt;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    State temp_state = states[state_i];
+    State* state = &temp_state;
+    int gen_len = 0;
+    for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
+      const Stage& stage = (*state)->stages[stage_id];
+      // Skip the inlined stage and placeholder stage
+      if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+        continue;
+      }
+
+      if (HasReduceIter(stage)) {
+        stage_ids.push_back(Integer(stage_id));
+        gen_len += 4;
+      }
+    }
+    gen_len_max = std::max(gen_len_max, gen_len);
+    state->unroll_start(stage_ids);
+    states_prompt.push_back(*state);
+    stage_ids.clear();
+  }
+  SequenceTokenType sequence_tokens = arr2vec(gen_func(policy->search_task, states_prompt, gen_len_max));
+  Array<State> ret_array;
+  for (size_t state_i = 0; state_i < states_prompt.size(); state_i++) {
+    State tmp_s = states_prompt[state_i];
+    State *state = &tmp_s;
+    const auto &tokens = sequence_tokens[state_i];
+    int token_idx = 0;
+    size_t stage_id = 0;
+
+    for (; stage_id < (*state)->stages.size(); ++stage_id) {
+      const Stage& stage = (*state)->stages[stage_id];
+      // Skip the inlined stage and placeholder stage
+      if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+        continue;
+      }
+
+      // Handle always_unroll_inner attr
+      if (stage->op->attrs.count(SearchPolicyKey::always_unroll_inner)) {
+        const auto& to_unroll_name_set =
+            GetIterNameSetParam(stage->op->attrs, SearchPolicyKey::always_unroll_inner);
+
+        // Unroll the space iterators and reduce iterators listed in the attrs in the innermost
+        // tile
+        std::set<std::string> visited_names;
+        for (int n = static_cast<int>(stage->iters.size()) - 1; n >= 0; n--) {
+          const Iterator& it = stage->iters[n];
+
+          // If we meet two iterators that come from a same original iterator,
+          // then we are out of the innermost tile
+          size_t size_before = visited_names.size();
+          ExtractOriginalIterators(it->name, &visited_names);
+          if (size_before == visited_names.size()) {
+            break;
+          }
+
+          std::set<std::string> name;
+          ExtractOriginalIterators(it->name, &name);
+          if (name.size() == 1 && to_unroll_name_set.count(*name.begin())) {
+            if (it->annotation == IteratorAnnotation::kNone) {
+              state->unroll(stage_id, it);
+            }
+          }
+        }
+      }
+
+      if (HasReduceIter(stage)) {
+        // Use auto unroll for multi level tiled stage
+        int iter_id = GetIndex(stage->iters, (*state)->stages[stage_id]->iters[0]);
+
+        try {
+          if (tokens.at(token_idx++) != "PR") break;
+          if (std::stoul(tokens.at(token_idx++)) != stage_id) break;
+          if (std::stoi(tokens.at(token_idx++)) != iter_id) break;
+          const std::string &pragma_type = tokens.at(token_idx++);
+          int pragma_num = std::stoi(pragma_type.substr(std::string("auto_unroll_max_step$").size()));
+          if (std::find(auto_unroll_configs.begin(), auto_unroll_configs.end(), pragma_num) == auto_unroll_configs.end()) break;
+
+          state->pragma(stage_id, (*state)->stages[stage_id]->iters[0], pragma_type);
+        } catch (std::exception& e) {
+          break;
+        }
+      }
+    }
+    if (stage_id == (*state)->stages.size()) {
+      ret_array.push_back(tmp_s);
+    } else {
+      // std::cout << "" << std::endl;
+    }
+  }
+
+  std::cout << ", " << ret_array.size();
+  return ret_array;
+}
+Array<State> InitVectorization::Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const {
+  int gen_len_max = 0;
+  Array<Integer> stage_ids;
+  Array<State> states_prompt;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    State tmp_s = states[state_i];
+    State *state = &tmp_s;
+    int gen_len = 0;
+
+    for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
+      const Stage& stage = (*state)->stages[stage_id];
+      // Skip the inlined stage and placeholder stage
+      if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+        continue;
+      }
+
+      // Try to fuse and vectorize the space iterators in the inner most tile
+      int64_t cum_length_prod = 1;
+
+      int num_fusible = 0;
+      while (num_fusible < static_cast<int>(stage->iters.size())) {
+        int iter_id = static_cast<int>(stage->iters.size()) - 1 - num_fusible;
+        // Stop if this iterator has been a compute at attach point
+        if ((*state)->attach_map->iter_to_attached_stages.count(std::make_pair(stage_id, iter_id))) {
+          break;
+        }
+
+        const Iterator& it = stage->iters[iter_id];
+        // Stop if we meet a reduce iterator or annotated iterator
+        if (it->iter_kind == IteratorKind::kReduction ||
+            it->annotation != IteratorAnnotation::kNone) {
+          break;
+        }
+
+        // Stop if the memory access is not continuous (vectorizable)
+        // Note: The check is too hard, so we use heuristic here
+        if (IsTiled(stage) && num_fusible != 0) {
+          // If the stage is tiled, then the memory access must not be continuous
+          // for the innermost two iterators
+          break;
+        }
+
+        cum_length_prod *= GetExtent(it);
+        if (cum_length_prod > GetIntParam(policy->params, SketchParamKey::max_vectorize_size)) {
+          break;
+        }
+
+        num_fusible++;
+      }
+
+      if (num_fusible > 0) {
+        stage_ids.push_back(Integer(stage_id));
+        gen_len += (num_fusible + 6);
+      }
+    }
+    gen_len_max = std::max(gen_len_max, gen_len);
+    state->vectorization_start(stage_ids);
+    states_prompt.push_back(*state);
+    stage_ids.clear();
+  }
+
+  SequenceTokenType sequence_tokens = arr2vec(gen_func(policy->search_task, states_prompt, gen_len_max));
+  Array<State> ret_array;
+  for (size_t state_i = 0; state_i < states_prompt.size(); state_i++) {
+    State tmp_s = states_prompt[state_i];
+    State *state = &tmp_s;
+    const auto &tokens = sequence_tokens[state_i];
+    int token_idx = 0;
+    size_t stage_id = 0;
+
+    for (; stage_id < (*state)->stages.size(); ++stage_id) {
+      const Stage& stage = (*state)->stages[stage_id];
+      // Skip the inlined stage and placeholder stage
+      if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+        continue;
+      }
+
+      // Try to fuse and vectorize the space iterators in the inner most tile
+      int64_t cum_length_prod = 1;
+
+      int num_fusible = 0;
+      while (num_fusible < static_cast<int>(stage->iters.size())) {
+        int iter_id = static_cast<int>(stage->iters.size()) - 1 - num_fusible;
+        // Stop if this iterator has been a compute at attach point
+        if ((*state)->attach_map->iter_to_attached_stages.count(std::make_pair(stage_id, iter_id))) {
+          break;
+        }
+
+        const Iterator& it = stage->iters[iter_id];
+        // Stop if we meet a reduce iterator or annotated iterator
+        if (it->iter_kind == IteratorKind::kReduction ||
+            it->annotation != IteratorAnnotation::kNone) {
+          break;
+        }
+
+        // Stop if the memory access is not continuous (vectorizable)
+        // Note: The check is too hard, so we use heuristic here
+        if (IsTiled(stage) && num_fusible != 0) {
+          // If the stage is tiled, then the memory access must not be continuous
+          // for the innermost two iterators
+          break;
+        }
+
+        cum_length_prod *= GetExtent(it);
+        if (cum_length_prod > GetIntParam(policy->params, SketchParamKey::max_vectorize_size)) {
+          break;
+        }
+
+        num_fusible++;
+      }
+      if (num_fusible > 0) {
+        try {
+          const std::string &stepname = tokens.at(token_idx++);
+          if (stepname == "AN") {
+            if (std::stoul(tokens.at(token_idx++)) != stage_id) break;
+            int iter_id = GetIndex(stage->iters, stage->iters.back());
+            if (std::stoi(tokens.at(token_idx++)) != iter_id) break;
+            if (std::stoi(tokens.at(token_idx++)) != static_cast<int>(IteratorAnnotation::kVectorize)) break;
+            state->vectorize(stage_id, stage->iters.back());
+          } else if (stepname == "FU") {
+            if (std::stoul(tokens.at(token_idx++)) != stage_id) break;
+            std::vector<int> fuse_vec;
+            std::string next_token;
+            while (1) {
+              next_token = tokens.at(token_idx++);
+              if (next_token == "AN") break;
+              fuse_vec.push_back(std::stoi(next_token));
+            }
+            if (next_token != "AN") break;
+            if (fuse_vec.size() < 2) break;
+            if (fuse_vec[0] >= fuse_vec[fuse_vec.size() - 1]) break;
+            if (std::stoul(tokens.at(token_idx++)) != stage_id) break;
+            Array<Iterator> to_fuse(stage->iters.end() + (fuse_vec[0] - fuse_vec[fuse_vec.size() - 1] - 1), 
+                                    stage->iters.end());
+            const Iterator& it = state->fuse(stage_id, to_fuse);
+            const Stage& stage = (*state)->stages[stage_id];
+            int iter_id = GetIndex(stage->iters, it);
+            if (std::stoi(tokens.at(token_idx++)) != iter_id) break;
+            if (std::stoi(tokens.at(token_idx++)) != static_cast<int>(IteratorAnnotation::kVectorize)) break;
+            
+            state->vectorize(stage_id, it);
+          } else {
+            break;
+          }
+        } catch (std::exception& e) {
+          break;
+        }
+      }
+    }
+    if (stage_id == (*state)->stages.size()) {
+      ret_array.push_back(tmp_s);
+    } else {
+      // std::cout << "" << std::endl;
+    }
+  }
+
+  std::cout << ", " << ret_array.size();
+  return ret_array;
+}
+Array<State> InitThreadBind::Apply(SketchPolicyNode* policy, const Array<State> &states, const PackedFunc &gen_func) const {
+  Array<State> states_prompt;
+  bool vaild_tag;
+  int gen_len_max = 0;
+  for (size_t state_i = 0; state_i < states.size(); state_i++) {
+    vaild_tag = true;
+    State temp_state = states[state_i];
+    State* state = &temp_state;
+    // Collect all stages that are roots of stages that perform multi-level tiling.
+    std::set<int> multi_level_tiling_root_set;
+    for (size_t stage_id = 0; stage_id < (*state)->stages.size(); ++stage_id) {
+      if (NeedsMultilevelTiling(policy->search_task, *state, stage_id)) {
+        const Stage& stage = (*state)->stages[stage_id];
+        if (stage->compute_at == ComputeAtKind::kInlined) {
+          continue;
+        } else if (stage->compute_at != ComputeAtKind::kIter) {
+          // This stage is not multi-level tiled,
+          // so it must be produced by RuleCrossThreadReduction.
+          ICHECK(HasCrossThreadReduction(*state, stage_id));
+        } else {
+          const auto res = (*state)->attach_map->stage_to_attach_iter.find(stage_id);
+          ICHECK(res != (*state)->attach_map->stage_to_attach_iter.end());
+          multi_level_tiling_root_set.insert(res->second.first);
+        }
+      }
+    }
+
+    try {
+      *state = policy->search_task->compute_dag.InferBound(*state);
+    } catch (std::exception& e) {
+      continue;
+    }
+
+    for (int stage_id = (*state)->stages.size() - 1; stage_id >= 0; --stage_id) {
+      const Stage& stage = (*state)->stages[stage_id];
+
+      if (stage->compute_at == ComputeAtKind::kInlined || stage->op_type == StageKind::kPlaceholder) {
+        continue;
+      }
+
+      // Deal with the cross-thread reduction generated by RuleCrossThreadReduction
+      if (HasCrossThreadReduction(*state, stage_id)) {
+        if (stage->compute_at != ComputeAtKind::kRoot) {
+          continue;
+        }
+
+        Iterator fused_it;
+        *state = std::move(FuseAllOuterSpaceIterators(*state, stage_id, &fused_it));
+        state->bind(stage_id, fused_it, IteratorAnnotation::kBlockX);
+        continue;
+      }
+
+      // Skip if this stage has already been annotaed with threadIdx.x
+      if (HasAnnotatedIter(stage, IteratorAnnotation::kThreadX)) {
+        continue;
+      }
+
+      if (stage->compute_at == ComputeAtKind::kRoot) {
+        // This stage has not been tiled, but in GPU schedule, we must tile the root stage
+        // to do thread binding
+        if (!multi_level_tiling_root_set.count(stage_id)) {
+          Iterator fused_it;
+          *state = FuseAllOuterSpaceIterators(*state, stage_id, &fused_it);
+
+          if (GetExtent(fused_it) <= policy->search_task->hardware_params->warp_size) {
+            state->bind(stage_id, fused_it, IteratorAnnotation::kThreadX);
+          } else {
+            // Set threadIdx.x = default_warp_size by default.
+            // The later EvolutionarySearch will try more possibility
+            const auto& split_its = state->split(
+                stage_id, fused_it, {Integer(policy->search_task->hardware_params->warp_size)});
+            state->bind(stage_id, split_its[0], IteratorAnnotation::kBlockX);
+            state->bind(stage_id, split_its[1], IteratorAnnotation::kThreadX);
+          }
+          continue;
+        }
+
+        // Otherwise, this is a tiled root stage, we assume it should be tiled with 3 space level
+        // in the outer iterators.
+        // The remaining part deals with the thread binding for multi-level tiled stages
+        auto pop = stage->op.as<te::ComputeOpNode>();
+        std::vector<Iterator> to_fuse;
+        int total_space_extent = 1;
+        for (const auto& i : pop->root_iter_vars()) {
+          ICHECK(i->dom.defined());
+          const auto& pint = i->dom->extent.as<IntImmNode>();
+          ICHECK(pint);
+          total_space_extent *= pint->value;
+        }
+
+        bool check_min_thread_extent = true;
+        // If the total space extent is too small, disable the check of minimal thread extent
+        if (total_space_extent <= policy->search_task->hardware_params->warp_size * 2) {
+          check_min_thread_extent = false;
+        }
+
+        // Fuse the outermost space tile as blockIdx
+        for (size_t i = 0; i < pop->axis.size(); i++) {
+          const auto& it = (*state)->stages[stage_id]->iters[i];
+          // There may be some iterators that are marked with no split, stop if reaches next
+          // tiling level
+          if (!StrEndsWith(it->name, ".0")) {
+            break;
+          }
+          to_fuse.push_back(it);
+        }
+        const auto& blockidx_it = state->fuse(stage_id, to_fuse);
+        state->bind(stage_id, blockidx_it, IteratorAnnotation::kBlockX);
+
+        // Fuse the second outermost space tile as vthread
+        to_fuse.clear();
+        for (size_t i = 1; i < pop->axis.size() + 1; i++) {
+          const auto& it = (*state)->stages[stage_id]->iters[i];
+          // There may be some iterators that are marked with no split, stop if reaches next
+          // tiling level
+          if (!StrEndsWith(it->name, ".1")) {
+            break;
+          }
+          to_fuse.push_back((*state)->stages[stage_id]->iters[i]);
+        }
+        const auto& vthread_it = state->fuse(stage_id, to_fuse);
+        if (GetExtent(vthread_it) > policy->search_task->hardware_params->max_vthread_extent) {
+          vaild_tag = false;
+          break;
+        }
+        state->bind(stage_id, vthread_it, IteratorAnnotation::kVThread);
+
+        // Fuse the third outermost space tile as threadIdx
+        to_fuse.clear();
+        for (size_t i = 2; i < pop->axis.size() + 2; i++) {
+          const auto& it = (*state)->stages[stage_id]->iters[i];
+          // There may be some iterators that are marked with no split, stop if reaches next
+          // tiling level
+          if (!StrEndsWith(it->name, ".2")) {
+            break;
+          }
+          to_fuse.push_back((*state)->stages[stage_id]->iters[i]);
+        }
+        const auto& threadidx_it = state->fuse(stage_id, to_fuse);
+        if (check_min_thread_extent &&
+            GetExtent(threadidx_it) < policy->search_task->hardware_params->warp_size) {
+          vaild_tag = false;
+          break;
+        }
+        state->bind(stage_id, threadidx_it, IteratorAnnotation::kThreadX);
+      } else if (stage->compute_at == ComputeAtKind::kIter &&
+                StrEndsWith(stage->op->name, ".shared")) {
+        // Do cooperative fetching for the cache read stage.
+        // Get spatial_split_step_ids from the root stage
+        const auto& it = (*state)->attach_map->stage_to_attach_iter.find(stage_id);
+        ICHECK(it != (*state)->attach_map->stage_to_attach_iter.end());
+        Array<Integer> spatial_split_step_ids = GetSpatialSplitStepIds(*state, it->second.first);
+
+        // Fuse all iterators to do cooperative fetching
+        Iterator fused = state->fuse(stage_id, (*state)->stages[stage_id]->iters);
+        // Split out an extra iterator for vectorization
+        // The later EvolutionarySearch will try more possibility
+        const auto& iters0 = state->split(stage_id, fused, {Integer(1)});
+        state->vectorize(stage_id, iters0[1]);
+        // Follow split to keep a same thread extent with the root stage
+        const auto& iters1 =
+            state->follow_fused_split(stage_id, iters0[0], spatial_split_step_ids, 1, true);
+        state->bind(stage_id, iters1[1], IteratorAnnotation::kThreadX);
+      }
+    }
+    if (!vaild_tag) continue;
+    state->thread_bind_start();
+    states_prompt.push_back(*state);
+
+    int gen_len = 0;
+    int ppt_id = -1;
+    for (size_t step_id = 0; step_id < (*state)->transform_steps.size(); ++step_id) {
+      if ((*state)->transform_steps[step_id].as<PromptStepNode>()) {
+        ppt_id = static_cast<int>(step_id);
+      }
+      if (ppt_id == -1) {
+        continue;
+      }
+      if (auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>()) {
+        gen_len += (ps->lengths.size() + 5);
+      }
+    }
+    gen_len_max = std::max(gen_len_max, gen_len);
+  }
+
+  SequenceTokenType sequence_tokens = arr2vec(gen_func(policy->search_task, states_prompt, gen_len_max));
+
+  Array<State> ret_array;
+  for (size_t state_i = 0; state_i < states_prompt.size(); state_i++) {
+    const auto &tokens = sequence_tokens[state_i];
+    int token_idx = 0;
+    size_t step_id = 0;
+    State tmp_s = states_prompt[state_i];
+    State *state = &tmp_s;
+    int ppt_id = -1;
+    for (; step_id < (*state)->transform_steps.size(); ++step_id) {
+      if ((*state)->transform_steps[step_id].as<PromptStepNode>()) {
+        ppt_id = static_cast<int>(step_id);
+      }
+      if (ppt_id == -1) {
+        continue;
+      }
+      if (auto ps = (*state)->transform_steps[step_id].as<SplitStepNode>()) {
+        try {
+          int extent;
+          if (ps->extent) {
+            extent = GetIntImm(ps->extent.value());
+          } else {
+            extent = 0;
+          }
+          if (tokens.at(token_idx++) != "SPC") break;
+          if (std::stoi(tokens.at(token_idx++)) != ps->stage_id) break;
+          if (std::stoi(tokens.at(token_idx++)) != ps->iter_id) break;
+          if (std::stoi(tokens.at(token_idx++)) != extent) break;
+          int extent_pord = 1;
+          Array<Integer> candidate_lengths;
+          for (size_t i = 0; i < ps->lengths.size(); i++) {
+            int factor = std::stoi(tokens.at(token_idx++));
+            extent_pord *= factor;
+            candidate_lengths.push_back(Integer(factor));
+          }
+          // if (extent_pord <= 0) break;
+          // if (extent_pord <= 0 || extent_pord > extent || extent % extent_pord != 0) break;
+          if (std::stoi(tokens.at(token_idx++)) != ps->inner_to_outer) break;
+          state->split_copy(ps->stage_id, ps->iter_id, ps->extent, 
+                            Array<Optional<Integer>>(candidate_lengths.begin(), candidate_lengths.end()), 
+                            ps->inner_to_outer);
+        } catch (std::exception& e) {
+          break;
+        }
+      }
+    }
+    if (step_id == (*state)->transform_steps.size()) {
+      ret_array.push_back(tmp_s);
+    } else {
+      // std::cout << "" << std::endl;
+    }
+  }
+  std::cout << ", " << ret_array.size();
+  return ret_array;
 }
 
 }  // namespace auto_scheduler
