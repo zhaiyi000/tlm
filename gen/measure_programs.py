@@ -83,11 +83,14 @@ def main(args):
     to_measure_list = []
     with open(args.to_measure_path, 'r') as f:
         lines = f.read().strip().split('\n')
+    with open(args.measured_path, 'w') as f:
+        pass
     for line in lines:
-        inp_str = json.dumps(json.loads(line)['i'])
-        if inp_str in measured_set:
-            continue
-        to_measure_list.append(line)
+        if line:
+            inp_str = json.dumps(json.loads(line)['i'])
+            if inp_str in measured_set:
+                continue
+            to_measure_list.append(line)
     
     # inputs, _ = auto_scheduler.RecordReader(args.to_measure_path).read_lines()
     input_dict = {}

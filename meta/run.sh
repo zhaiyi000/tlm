@@ -2,8 +2,8 @@
 
 python dataset_collect_models.py --target=nvidia/nvidia-v100
 # Note that when the target is CPU, you need to specify '-num-cores'
-# such as   '--target="llvm -mcpu=core-avx2 -model=v100 -num-cores=4"'
-# In ansor, '--target="llvm -mcpu=core-avx2 -model=v100"' is ok.
+# such as   '--target="llvm -mcpu=core-avx2 -model=i7 -num-cores=4"'
+# In ansor, '--target="llvm -mcpu=core-avx2 -model=i7"' is ok.
 
 
 python dump_programs.py --target=nvidia/nvidia-v100

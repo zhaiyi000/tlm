@@ -18,19 +18,21 @@ TLM has been integrated into [Ansor](gen), [TVM(MetaSchedule)](meta), MindSpore'
   pip install -r requirements.txt
   ```
 
-- You can download the [tlm_dataset](https://drive.google.com/file/d/1omj7AfPFIjuSgs-UBld0YRKWmmCe08G3/view?usp=drive_link) we have collected and put them in the corresponding path.
+- You can download the [tlm_dataset](https://drive.google.com/file/d/1MdOxSIBFqYl1pWWUmj18vm4AG4Sbly8Z/view) we have collected and put them in the corresponding path.
 
   ```
   (py38) ➜  ~ tree tlm_dataset -L 2
   tlm_dataset
   ├── gen
   │   ├── dataset
-  │   └── gen_data
+  │   ├── gen_data
+  │   └── utils.json
   └── meta
       ├── dataset
-      └── meta_data
+      ├── meta_data
+      └── meta_utils.json
   
-  7 directories, 0 files
+  7 directories, 2 files
   ```
 
 ## Getting Started Instructions
@@ -114,7 +116,7 @@ cd gen
      python dump_programs.py --target=nvidia/nvidia-v100
      ```
 
-   - Use unlabeled data to build a vocabulary and a tokenizer and save them to `--tokenizer_path`. We recommend using the tokenizer we provide in tlm_dataset. Our tokenizer is trained on 10 million pieces of unlabeled data and contains a larger vocabulary.
+   - Use unlabeled data to build a vocabulary and a tokenizer and save them to `--tokenizer_path`.
 
      ```shell
      python make_dataset.py \
