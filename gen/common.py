@@ -86,6 +86,8 @@ def hold_out_task_files(target, only_bert=False):
             "mobilenet_v2": get_task_info_filename(('mobilenet_v2', [1,3,224,224]), target),
             "resnext_50": get_task_info_filename(('resnext_50', [1,3,224,224]), target),
             "bert_base": get_task_info_filename(('bert_base', [1,128]), target),
+            # "gpt2": get_task_info_filename(('gpt2', [1,128]), target),
+            # "llama": get_task_info_filename(('llama', [4,256]), target),
             "bert_tiny": get_task_info_filename(('bert_tiny', [1,128]), target),
             
             "densenet_121": get_task_info_filename(('densenet_121', [8,3,256,256]), target),

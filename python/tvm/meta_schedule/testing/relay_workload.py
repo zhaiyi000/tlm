@@ -114,6 +114,62 @@ def _get_network(
         with tvm.transform.PassContext(opt_level=3):
             mod = tvm.transform.Sequential(passes)(mod)
         inputs = (input_name, input_shape, dtype)
+    elif name in ["gpt2"]:
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # pip3 install transformers==3.5 torch==1.7
+        import torch  # type: ignore
+        import transformers  # type: ignore
+
+        assert layout is None
+
+        config_dict = {
+            "gpt2": transformers.GPT2Config(
+                return_dict=False,
+            )
+        }
+        configuration = config_dict[name]
+        model = transformers.GPT2Model(configuration)
+        input_name = "input_ids"
+        input_dtype = "int64"
+        a = torch.randint(10000, input_shape)  # pylint: disable=no-member
+        model.eval()
+        scripted_model = torch.jit.trace(model, [a], strict=False)  # type: ignore
+        input_name = "input_ids"
+        shape_list = [(input_name, input_shape)]
+        mod, params = relay.frontend.from_pytorch(scripted_model, shape_list)
+        mod = relay.transform.FastMath()(mod)
+        mod = relay.transform.CombineParallelBatchMatmul()(mod)
+        inputs = (input_name, input_shape, input_dtype)
+    elif name in ["llama"]:
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # pip3 install transformers==3.5 torch==1.7
+        import torch  # type: ignore
+        import transformers  # type: ignore
+
+        assert layout is None
+
+        config_dict = {
+            "llama": transformers.LlamaConfig(
+                num_hidden_layers=12,
+                hidden_size=768,
+                intermediate_size=3072,
+                num_attention_heads=12,
+                return_dict=False,
+            )
+        }
+        configuration = config_dict[name]
+        model = transformers.LlamaModel(configuration)
+        input_name = "input_ids"
+        input_dtype = "int64"
+        a = torch.randint(10000, input_shape)  # pylint: disable=no-member
+        model.eval()
+        scripted_model = torch.jit.trace(model, [a], strict=False)  # type: ignore
+        input_name = "input_ids"
+        shape_list = [(input_name, input_shape)]
+        mod, params = relay.frontend.from_pytorch(scripted_model, shape_list)
+        mod = relay.transform.FastMath()(mod)
+        mod = relay.transform.CombineParallelBatchMatmul()(mod)
+        inputs = (input_name, input_shape, input_dtype)
     elif name in ["bert_tiny", "bert_base", "bert_medium", "bert_large"]:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         # pip3 install transformers==3.5 torch==1.7

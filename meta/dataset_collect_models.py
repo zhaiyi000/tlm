@@ -59,9 +59,17 @@ def _build_dataset() -> List[Tuple[str, List[int]]]:
                 network_keys.append((name, [batch_size, 3, image_size, image_size, 16]))
     # bert
     for name in ["bert_tiny", "bert_base", "bert_medium", "bert_large"]:
+    # for name in ["bert_tiny", "bert_base", "bert_medium", "bert_large", "gpt2"]:
         for batch_size in [1, 2, 4]:
             for seq_length in [64, 128, 256]:
                 network_keys.append((name, [batch_size, seq_length]))
+
+    # # llama
+    # for name in ["llama"]:
+    #     for batch_size in [2, 4]:
+    #         for seq_length in [64, 128, 256]:
+    #             network_keys.append((name, [batch_size, seq_length]))
+
     # dcgan
     for name in ["dcgan"]:
         for batch_size in [1, 4, 8]:
