@@ -4,6 +4,8 @@ This repo is based on TVM [v0.12.0](https://github.com/apache/tvm/tree/v0.12.0) 
 
 TLM has been integrated into [Ansor](gen), [TVM(MetaSchedule)](meta), MindSpore's [AKG](https://github.com/mindspore-ai/akg) and AKG-MLIR.
 
+[tlm slides](tlm%20slides.pptx)
+
 ## Installation
 
 - Build and install this repo following the [guide](docs/install/from_source.rst).
